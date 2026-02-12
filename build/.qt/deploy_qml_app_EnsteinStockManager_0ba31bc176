@@ -1,0 +1,4 @@
+
+include(/home/ensteinrobotsystem/Downloads/enstein_stock_manager-1.0.16/build/.qt/QtDeploySupport.cmake)
+_qt_internal_show_skip_runtime_deploy_message("shared Qt libs")
+_qt_internal_show_skip_qml_runtime_deploy_message()

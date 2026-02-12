@@ -1,0 +1,1335 @@
+{
+    "classes": [
+        {
+            "className": "ExcelTableModel",
+            "methods": [
+                {
+                    "access": "public",
+                    "arguments": [
+                        {
+                            "name": "row",
+                            "type": "int"
+                        },
+                        {
+                            "name": "column",
+                            "type": "int"
+                        }
+                    ],
+                    "name": "getData",
+                    "returnType": "QVariant"
+                },
+                {
+                    "access": "public",
+                    "arguments": [
+                        {
+                            "name": "row",
+                            "type": "int"
+                        },
+                        {
+                            "name": "column",
+                            "type": "int"
+                        },
+                        {
+                            "name": "value",
+                            "type": "QVariant"
+                        }
+                    ],
+                    "name": "setDataAt",
+                    "returnType": "bool"
+                },
+                {
+                    "access": "public",
+                    "name": "addRow",
+                    "returnType": "void"
+                },
+                {
+                    "access": "public",
+                    "arguments": [
+                        {
+                            "name": "row",
+                            "type": "int"
+                        }
+                    ],
+                    "name": "removeRowAt",
+                    "returnType": "bool"
+                },
+                {
+                    "access": "public",
+                    "name": "addColumn",
+                    "returnType": "void"
+                },
+                {
+                    "access": "public",
+                    "name": "clear",
+                    "returnType": "void"
+                }
+            ],
+            "object": true,
+            "qualifiedClassName": "ExcelTableModel",
+            "superClasses": [
+                {
+                    "access": "public",
+                    "name": "QAbstractTableModel"
+                }
+            ]
+        },
+        {
+            "className": "ExcelHandler",
+            "methods": [
+                {
+                    "access": "public",
+                    "arguments": [
+                        {
+                            "name": "rows",
+                            "type": "int"
+                        },
+                        {
+                            "name": "cols",
+                            "type": "int"
+                        }
+                    ],
+                    "name": "createNew",
+                    "returnType": "void"
+                },
+                {
+                    "access": "public",
+                    "arguments": [
+                        {
+                            "name": "rows",
+                            "type": "int"
+                        }
+                    ],
+                    "name": "createNew",
+                    "returnType": "void"
+                },
+                {
+                    "access": "public",
+                    "name": "createNew",
+                    "returnType": "void"
+                },
+                {
+                    "access": "public",
+                    "arguments": [
+                        {
+                            "name": "rows",
+                            "type": "int"
+                        }
+                    ],
+                    "name": "createStockFile",
+                    "returnType": "void"
+                },
+                {
+                    "access": "public",
+                    "name": "createStockFile",
+                    "returnType": "void"
+                },
+                {
+                    "access": "public",
+                    "arguments": [
+                        {
+                            "name": "rows",
+                            "type": "int"
+                        }
+                    ],
+                    "name": "createPurchaseFile",
+                    "returnType": "void"
+                },
+                {
+                    "access": "public",
+                    "name": "createPurchaseFile",
+                    "returnType": "void"
+                },
+                {
+                    "access": "public",
+                    "name": "getFileName",
+                    "returnType": "QString"
+                },
+                {
+                    "access": "public",
+                    "name": "getFileType",
+                    "returnType": "QString"
+                },
+                {
+                    "access": "public",
+                    "arguments": [
+                        {
+                            "name": "filePath",
+                            "type": "QString"
+                        }
+                    ],
+                    "name": "loadExcel",
+                    "returnType": "bool"
+                },
+                {
+                    "access": "public",
+                    "arguments": [
+                        {
+                            "name": "filePath",
+                            "type": "QString"
+                        }
+                    ],
+                    "name": "saveExcel",
+                    "returnType": "bool"
+                },
+                {
+                    "access": "public",
+                    "name": "saveExcel",
+                    "returnType": "bool"
+                },
+                {
+                    "access": "public",
+                    "arguments": [
+                        {
+                            "name": "filePath",
+                            "type": "QString"
+                        }
+                    ],
+                    "name": "setPermanentFile",
+                    "returnType": "bool"
+                },
+                {
+                    "access": "public",
+                    "name": "loadPermanentFile",
+                    "returnType": "bool"
+                },
+                {
+                    "access": "public",
+                    "name": "saveToPermanent",
+                    "returnType": "bool"
+                },
+                {
+                    "access": "public",
+                    "name": "getSavedPermanentPath",
+                    "returnType": "QString"
+                },
+                {
+                    "access": "public",
+                    "name": "hasSavedPermanentFile",
+                    "returnType": "bool"
+                },
+                {
+                    "access": "public",
+                    "arguments": [
+                        {
+                            "name": "filePath",
+                            "type": "QString"
+                        }
+                    ],
+                    "name": "appendFromFile",
+                    "returnType": "bool"
+                },
+                {
+                    "access": "public",
+                    "arguments": [
+                        {
+                            "name": "filePath",
+                            "type": "QString"
+                        }
+                    ],
+                    "name": "appendStockFile",
+                    "returnType": "bool"
+                },
+                {
+                    "access": "public",
+                    "arguments": [
+                        {
+                            "name": "filePath",
+                            "type": "QString"
+                        }
+                    ],
+                    "name": "validateFileStructure",
+                    "returnType": "bool"
+                },
+                {
+                    "access": "public",
+                    "arguments": [
+                        {
+                            "name": "title",
+                            "type": "QString"
+                        },
+                        {
+                            "name": "filter",
+                            "type": "QString"
+                        }
+                    ],
+                    "name": "browseOpenFile",
+                    "returnType": "QString"
+                },
+                {
+                    "access": "public",
+                    "arguments": [
+                        {
+                            "name": "title",
+                            "type": "QString"
+                        },
+                        {
+                            "name": "filter",
+                            "type": "QString"
+                        }
+                    ],
+                    "name": "browseSaveFile",
+                    "returnType": "QString"
+                },
+                {
+                    "access": "public",
+                    "arguments": [
+                        {
+                            "name": "title",
+                            "type": "QString"
+                        }
+                    ],
+                    "name": "browseFolder",
+                    "returnType": "QString"
+                },
+                {
+                    "access": "public",
+                    "arguments": [
+                        {
+                            "name": "fromDate",
+                            "type": "QString"
+                        },
+                        {
+                            "name": "toDate",
+                            "type": "QString"
+                        },
+                        {
+                            "name": "filePath",
+                            "type": "QString"
+                        }
+                    ],
+                    "name": "exportReport",
+                    "returnType": "bool"
+                },
+                {
+                    "access": "public",
+                    "arguments": [
+                        {
+                            "name": "partName",
+                            "type": "QString"
+                        }
+                    ],
+                    "name": "searchPartName",
+                    "returnType": "int"
+                },
+                {
+                    "access": "public",
+                    "arguments": [
+                        {
+                            "name": "searchText",
+                            "type": "QString"
+                        }
+                    ],
+                    "name": "searchAllMatches",
+                    "returnType": "QVariantList"
+                },
+                {
+                    "access": "public",
+                    "arguments": [
+                        {
+                            "name": "row",
+                            "type": "int"
+                        },
+                        {
+                            "name": "filePath",
+                            "type": "QString"
+                        }
+                    ],
+                    "name": "uploadFileForPart",
+                    "returnType": "bool"
+                },
+                {
+                    "access": "public",
+                    "arguments": [
+                        {
+                            "name": "row",
+                            "type": "int"
+                        }
+                    ],
+                    "name": "getUploadedFilePath",
+                    "returnType": "QString"
+                },
+                {
+                    "access": "public",
+                    "arguments": [
+                        {
+                            "name": "row",
+                            "type": "int"
+                        }
+                    ],
+                    "name": "openUploadedFile",
+                    "returnType": "bool"
+                },
+                {
+                    "access": "public",
+                    "arguments": [
+                        {
+                            "name": "row",
+                            "type": "int"
+                        }
+                    ],
+                    "name": "hasUploadedFile",
+                    "returnType": "bool"
+                },
+                {
+                    "access": "public",
+                    "arguments": [
+                        {
+                            "name": "partName",
+                            "type": "QString"
+                        },
+                        {
+                            "name": "category",
+                            "type": "QString"
+                        },
+                        {
+                            "name": "quantity",
+                            "type": "int"
+                        },
+                        {
+                            "name": "unitPrice",
+                            "type": "double"
+                        }
+                    ],
+                    "name": "addNewItem",
+                    "returnType": "void"
+                },
+                {
+                    "access": "public",
+                    "name": "getNextSerialNumber",
+                    "returnType": "int"
+                },
+                {
+                    "access": "public",
+                    "name": "syncToCloud",
+                    "returnType": "bool"
+                },
+                {
+                    "access": "public",
+                    "name": "syncFromCloud",
+                    "returnType": "bool"
+                },
+                {
+                    "access": "public",
+                    "name": "checkForUpdates",
+                    "returnType": "bool"
+                },
+                {
+                    "access": "public",
+                    "name": "getCloudFilePath",
+                    "returnType": "QString"
+                },
+                {
+                    "access": "public",
+                    "name": "canEdit",
+                    "returnType": "bool"
+                },
+                {
+                    "access": "public",
+                    "arguments": [
+                        {
+                            "name": "folder",
+                            "type": "QString"
+                        }
+                    ],
+                    "name": "setCloudFolder",
+                    "returnType": "void"
+                },
+                {
+                    "access": "public",
+                    "arguments": [
+                        {
+                            "name": "username",
+                            "type": "QString"
+                        }
+                    ],
+                    "name": "setCurrentUser",
+                    "returnType": "void"
+                },
+                {
+                    "access": "public",
+                    "arguments": [
+                        {
+                            "name": "role",
+                            "type": "QString"
+                        }
+                    ],
+                    "name": "setUserRole",
+                    "returnType": "void"
+                },
+                {
+                    "access": "public",
+                    "arguments": [
+                        {
+                            "name": "enabled",
+                            "type": "bool"
+                        }
+                    ],
+                    "name": "setSyncEnabled",
+                    "returnType": "void"
+                },
+                {
+                    "access": "public",
+                    "arguments": [
+                        {
+                            "name": "vendor",
+                            "type": "QVariantMap"
+                        }
+                    ],
+                    "name": "addVendorDetails",
+                    "returnType": "bool"
+                },
+                {
+                    "access": "public",
+                    "arguments": [
+                        {
+                            "name": "vendor",
+                            "type": "QVariantMap"
+                        }
+                    ],
+                    "name": "updateVendorDetails",
+                    "returnType": "bool"
+                },
+                {
+                    "access": "public",
+                    "arguments": [
+                        {
+                            "name": "name",
+                            "type": "QString"
+                        }
+                    ],
+                    "name": "deleteVendor",
+                    "returnType": "bool"
+                },
+                {
+                    "access": "public",
+                    "name": "getVendorList",
+                    "returnType": "QVariantList"
+                },
+                {
+                    "access": "public",
+                    "name": "getVendorNames",
+                    "returnType": "QStringList"
+                },
+                {
+                    "access": "public",
+                    "arguments": [
+                        {
+                            "name": "name",
+                            "type": "QString"
+                        }
+                    ],
+                    "name": "getVendorByName",
+                    "returnType": "QVariantMap"
+                },
+                {
+                    "access": "public",
+                    "arguments": [
+                        {
+                            "name": "itemDetails",
+                            "type": "QVariantMap"
+                        }
+                    ],
+                    "name": "addItemMasterDetails",
+                    "returnType": "bool"
+                },
+                {
+                    "access": "public",
+                    "arguments": [
+                        {
+                            "name": "itemDetails",
+                            "type": "QVariantMap"
+                        }
+                    ],
+                    "name": "updateItemMasterDetails",
+                    "returnType": "bool"
+                },
+                {
+                    "access": "public",
+                    "name": "getItemMasterList",
+                    "returnType": "QVariantList"
+                },
+                {
+                    "access": "public",
+                    "arguments": [
+                        {
+                            "name": "partName",
+                            "type": "QString"
+                        }
+                    ],
+                    "name": "deleteItem",
+                    "returnType": "bool"
+                },
+                {
+                    "access": "public",
+                    "arguments": [
+                        {
+                            "name": "vendor",
+                            "type": "QString"
+                        },
+                        {
+                            "name": "partName",
+                            "type": "QString"
+                        },
+                        {
+                            "name": "partNo",
+                            "type": "QString"
+                        },
+                        {
+                            "name": "qty",
+                            "type": "int"
+                        },
+                        {
+                            "name": "unitPrice",
+                            "type": "double"
+                        },
+                        {
+                            "name": "expectedDate",
+                            "type": "QString"
+                        },
+                        {
+                            "name": "department",
+                            "type": "QString"
+                        },
+                        {
+                            "name": "preparedBy",
+                            "type": "QString"
+                        }
+                    ],
+                    "name": "createPurchaseOrder",
+                    "returnType": "QString"
+                },
+                {
+                    "access": "public",
+                    "arguments": [
+                        {
+                            "name": "vendor",
+                            "type": "QString"
+                        },
+                        {
+                            "name": "partName",
+                            "type": "QString"
+                        },
+                        {
+                            "name": "partNo",
+                            "type": "QString"
+                        },
+                        {
+                            "name": "qty",
+                            "type": "int"
+                        },
+                        {
+                            "name": "unitPrice",
+                            "type": "double"
+                        },
+                        {
+                            "name": "expectedDate",
+                            "type": "QString"
+                        },
+                        {
+                            "name": "department",
+                            "type": "QString"
+                        }
+                    ],
+                    "name": "createPurchaseOrder",
+                    "returnType": "QString"
+                },
+                {
+                    "access": "public",
+                    "arguments": [
+                        {
+                            "name": "vendor",
+                            "type": "QString"
+                        },
+                        {
+                            "name": "partName",
+                            "type": "QString"
+                        },
+                        {
+                            "name": "partNo",
+                            "type": "QString"
+                        },
+                        {
+                            "name": "qty",
+                            "type": "int"
+                        },
+                        {
+                            "name": "unitPrice",
+                            "type": "double"
+                        },
+                        {
+                            "name": "expectedDate",
+                            "type": "QString"
+                        }
+                    ],
+                    "name": "createPurchaseOrder",
+                    "returnType": "QString"
+                },
+                {
+                    "access": "public",
+                    "arguments": [
+                        {
+                            "name": "poNo",
+                            "type": "QString"
+                        },
+                        {
+                            "name": "approvedBy",
+                            "type": "QString"
+                        }
+                    ],
+                    "name": "sendPOForApproval",
+                    "returnType": "bool"
+                },
+                {
+                    "access": "public",
+                    "arguments": [
+                        {
+                            "name": "statusFilter",
+                            "type": "QString"
+                        }
+                    ],
+                    "name": "getPOList",
+                    "returnType": "QVariantList"
+                },
+                {
+                    "access": "public",
+                    "name": "getPOList",
+                    "returnType": "QVariantList"
+                },
+                {
+                    "access": "public",
+                    "arguments": [
+                        {
+                            "name": "poNo",
+                            "type": "QString"
+                        },
+                        {
+                            "name": "newStatus",
+                            "type": "QString"
+                        }
+                    ],
+                    "name": "updatePOStatus",
+                    "returnType": "bool"
+                },
+                {
+                    "access": "public",
+                    "arguments": [
+                        {
+                            "name": "poNo",
+                            "type": "QString"
+                        },
+                        {
+                            "name": "poDetails",
+                            "type": "QVariantMap"
+                        }
+                    ],
+                    "name": "updatePurchaseOrder",
+                    "returnType": "bool"
+                },
+                {
+                    "access": "public",
+                    "arguments": [
+                        {
+                            "name": "poNo",
+                            "type": "QString"
+                        }
+                    ],
+                    "name": "getPOByNumber",
+                    "returnType": "QVariantMap"
+                },
+                {
+                    "access": "public",
+                    "name": "getNextPONumber",
+                    "returnType": "QString"
+                },
+                {
+                    "access": "public",
+                    "arguments": [
+                        {
+                            "name": "poNo",
+                            "type": "QString"
+                        },
+                        {
+                            "name": "receivedQty",
+                            "type": "int"
+                        },
+                        {
+                            "name": "acceptedQty",
+                            "type": "int"
+                        },
+                        {
+                            "name": "rejectedQty",
+                            "type": "int"
+                        },
+                        {
+                            "name": "remarks",
+                            "type": "QString"
+                        },
+                        {
+                            "name": "receivedBy",
+                            "type": "QString"
+                        }
+                    ],
+                    "name": "receiveGoods",
+                    "returnType": "QString"
+                },
+                {
+                    "access": "public",
+                    "arguments": [
+                        {
+                            "name": "poNo",
+                            "type": "QString"
+                        },
+                        {
+                            "name": "receivedQty",
+                            "type": "int"
+                        },
+                        {
+                            "name": "acceptedQty",
+                            "type": "int"
+                        },
+                        {
+                            "name": "rejectedQty",
+                            "type": "int"
+                        },
+                        {
+                            "name": "remarks",
+                            "type": "QString"
+                        }
+                    ],
+                    "name": "receiveGoods",
+                    "returnType": "QString"
+                },
+                {
+                    "access": "public",
+                    "name": "getGRNList",
+                    "returnType": "QVariantList"
+                },
+                {
+                    "access": "public",
+                    "arguments": [
+                        {
+                            "name": "partName",
+                            "type": "QString"
+                        },
+                        {
+                            "name": "partNo",
+                            "type": "QString"
+                        },
+                        {
+                            "name": "movementType",
+                            "type": "QString"
+                        },
+                        {
+                            "name": "qty",
+                            "type": "int"
+                        },
+                        {
+                            "name": "reference",
+                            "type": "QString"
+                        },
+                        {
+                            "name": "doneBy",
+                            "type": "QString"
+                        }
+                    ],
+                    "name": "logStockMovement",
+                    "returnType": "bool"
+                },
+                {
+                    "access": "public",
+                    "arguments": [
+                        {
+                            "name": "partNameFilter",
+                            "type": "QString"
+                        }
+                    ],
+                    "name": "getStockMovements",
+                    "returnType": "QVariantList"
+                },
+                {
+                    "access": "public",
+                    "name": "getStockMovements",
+                    "returnType": "QVariantList"
+                },
+                {
+                    "access": "public",
+                    "name": "getAllMovements",
+                    "returnType": "QVariantList"
+                },
+                {
+                    "access": "public",
+                    "arguments": [
+                        {
+                            "name": "partName",
+                            "type": "QString"
+                        },
+                        {
+                            "name": "qty",
+                            "type": "int"
+                        },
+                        {
+                            "name": "department",
+                            "type": "QString"
+                        },
+                        {
+                            "name": "issuedBy",
+                            "type": "QString"
+                        }
+                    ],
+                    "name": "issueStock",
+                    "returnType": "QString"
+                },
+                {
+                    "access": "public",
+                    "name": "getIssueNotes",
+                    "returnType": "QVariantList"
+                },
+                {
+                    "access": "public",
+                    "name": "getLowStockItems",
+                    "returnType": "QVariantList"
+                },
+                {
+                    "access": "public",
+                    "name": "lowStockCount",
+                    "returnType": "int"
+                },
+                {
+                    "access": "public",
+                    "name": "autoGeneratePOForLowStock",
+                    "returnType": "bool"
+                }
+            ],
+            "object": true,
+            "properties": [
+                {
+                    "constant": true,
+                    "designable": true,
+                    "final": false,
+                    "index": 0,
+                    "name": "model",
+                    "read": "model",
+                    "required": false,
+                    "scriptable": true,
+                    "stored": true,
+                    "type": "ExcelTableModel*",
+                    "user": false
+                },
+                {
+                    "constant": false,
+                    "designable": true,
+                    "final": false,
+                    "index": 1,
+                    "name": "currentFile",
+                    "notify": "currentFileChanged",
+                    "read": "currentFile",
+                    "required": false,
+                    "scriptable": true,
+                    "stored": true,
+                    "type": "QString",
+                    "user": false
+                },
+                {
+                    "constant": false,
+                    "designable": true,
+                    "final": false,
+                    "index": 2,
+                    "name": "hasUnsavedChanges",
+                    "notify": "unsavedChangesChanged",
+                    "read": "hasUnsavedChanges",
+                    "required": false,
+                    "scriptable": true,
+                    "stored": true,
+                    "type": "bool",
+                    "user": false
+                },
+                {
+                    "constant": false,
+                    "designable": true,
+                    "final": false,
+                    "index": 3,
+                    "name": "permanentFile",
+                    "notify": "permanentFileChanged",
+                    "read": "permanentFile",
+                    "required": false,
+                    "scriptable": true,
+                    "stored": true,
+                    "type": "QString",
+                    "user": false
+                },
+                {
+                    "constant": false,
+                    "designable": true,
+                    "final": false,
+                    "index": 4,
+                    "name": "cloudFolder",
+                    "notify": "cloudFolderChanged",
+                    "read": "cloudFolder",
+                    "required": false,
+                    "scriptable": true,
+                    "stored": true,
+                    "type": "QString",
+                    "user": false,
+                    "write": "setCloudFolder"
+                },
+                {
+                    "constant": false,
+                    "designable": true,
+                    "final": false,
+                    "index": 5,
+                    "name": "syncEnabled",
+                    "notify": "syncEnabledChanged",
+                    "read": "syncEnabled",
+                    "required": false,
+                    "scriptable": true,
+                    "stored": true,
+                    "type": "bool",
+                    "user": false,
+                    "write": "setSyncEnabled"
+                },
+                {
+                    "constant": false,
+                    "designable": true,
+                    "final": false,
+                    "index": 6,
+                    "name": "lastSyncTime",
+                    "notify": "lastSyncTimeChanged",
+                    "read": "lastSyncTime",
+                    "required": false,
+                    "scriptable": true,
+                    "stored": true,
+                    "type": "QString",
+                    "user": false
+                },
+                {
+                    "constant": false,
+                    "designable": true,
+                    "final": false,
+                    "index": 7,
+                    "name": "syncStatus",
+                    "notify": "syncStatusChanged",
+                    "read": "syncStatus",
+                    "required": false,
+                    "scriptable": true,
+                    "stored": true,
+                    "type": "QString",
+                    "user": false
+                },
+                {
+                    "constant": false,
+                    "designable": true,
+                    "final": false,
+                    "index": 8,
+                    "name": "currentUser",
+                    "notify": "currentUserChanged",
+                    "read": "currentUser",
+                    "required": false,
+                    "scriptable": true,
+                    "stored": true,
+                    "type": "QString",
+                    "user": false,
+                    "write": "setCurrentUser"
+                },
+                {
+                    "constant": false,
+                    "designable": true,
+                    "final": false,
+                    "index": 9,
+                    "name": "userRole",
+                    "notify": "userRoleChanged",
+                    "read": "userRole",
+                    "required": false,
+                    "scriptable": true,
+                    "stored": true,
+                    "type": "QString",
+                    "user": false,
+                    "write": "setUserRole"
+                },
+                {
+                    "constant": false,
+                    "designable": true,
+                    "final": false,
+                    "index": 10,
+                    "name": "lowStockCount",
+                    "notify": "lowStockCountChanged",
+                    "read": "lowStockCount",
+                    "required": false,
+                    "scriptable": true,
+                    "stored": true,
+                    "type": "int",
+                    "user": false
+                },
+                {
+                    "constant": false,
+                    "designable": true,
+                    "final": false,
+                    "index": 11,
+                    "name": "pendingPOCount",
+                    "notify": "pendingPOCountChanged",
+                    "read": "pendingPOCount",
+                    "required": false,
+                    "scriptable": true,
+                    "stored": true,
+                    "type": "int",
+                    "user": false
+                },
+                {
+                    "constant": false,
+                    "designable": true,
+                    "final": false,
+                    "index": 12,
+                    "name": "totalVendors",
+                    "notify": "vendorListChanged",
+                    "read": "totalVendors",
+                    "required": false,
+                    "scriptable": true,
+                    "stored": true,
+                    "type": "int",
+                    "user": false
+                }
+            ],
+            "qualifiedClassName": "ExcelHandler",
+            "signals": [
+                {
+                    "access": "public",
+                    "name": "currentFileChanged",
+                    "returnType": "void"
+                },
+                {
+                    "access": "public",
+                    "name": "unsavedChangesChanged",
+                    "returnType": "void"
+                },
+                {
+                    "access": "public",
+                    "name": "permanentFileChanged",
+                    "returnType": "void"
+                },
+                {
+                    "access": "public",
+                    "arguments": [
+                        {
+                            "name": "error",
+                            "type": "QString"
+                        }
+                    ],
+                    "name": "errorOccurred",
+                    "returnType": "void"
+                },
+                {
+                    "access": "public",
+                    "arguments": [
+                        {
+                            "name": "fileName",
+                            "type": "QString"
+                        }
+                    ],
+                    "name": "fileLoaded",
+                    "returnType": "void"
+                },
+                {
+                    "access": "public",
+                    "arguments": [
+                        {
+                            "name": "fileName",
+                            "type": "QString"
+                        }
+                    ],
+                    "name": "fileSaved",
+                    "returnType": "void"
+                },
+                {
+                    "access": "public",
+                    "arguments": [
+                        {
+                            "name": "fileName",
+                            "type": "QString"
+                        },
+                        {
+                            "name": "rowsAdded",
+                            "type": "int"
+                        },
+                        {
+                            "name": "rowsUpdated",
+                            "type": "int"
+                        }
+                    ],
+                    "name": "fileMerged",
+                    "returnType": "void"
+                },
+                {
+                    "access": "public",
+                    "arguments": [
+                        {
+                            "name": "row",
+                            "type": "int"
+                        }
+                    ],
+                    "name": "searchResultFound",
+                    "returnType": "void"
+                },
+                {
+                    "access": "public",
+                    "name": "cloudFolderChanged",
+                    "returnType": "void"
+                },
+                {
+                    "access": "public",
+                    "name": "syncEnabledChanged",
+                    "returnType": "void"
+                },
+                {
+                    "access": "public",
+                    "name": "lastSyncTimeChanged",
+                    "returnType": "void"
+                },
+                {
+                    "access": "public",
+                    "name": "syncStatusChanged",
+                    "returnType": "void"
+                },
+                {
+                    "access": "public",
+                    "name": "currentUserChanged",
+                    "returnType": "void"
+                },
+                {
+                    "access": "public",
+                    "name": "userRoleChanged",
+                    "returnType": "void"
+                },
+                {
+                    "access": "public",
+                    "arguments": [
+                        {
+                            "name": "success",
+                            "type": "bool"
+                        }
+                    ],
+                    "name": "syncCompleted",
+                    "returnType": "void"
+                },
+                {
+                    "access": "public",
+                    "arguments": [
+                        {
+                            "name": "message",
+                            "type": "QString"
+                        }
+                    ],
+                    "name": "conflictDetected",
+                    "returnType": "void"
+                },
+                {
+                    "access": "public",
+                    "name": "lowStockCountChanged",
+                    "returnType": "void"
+                },
+                {
+                    "access": "public",
+                    "name": "pendingPOCountChanged",
+                    "returnType": "void"
+                },
+                {
+                    "access": "public",
+                    "name": "vendorListChanged",
+                    "returnType": "void"
+                },
+                {
+                    "access": "public",
+                    "name": "itemMasterListChanged",
+                    "returnType": "void"
+                },
+                {
+                    "access": "public",
+                    "arguments": [
+                        {
+                            "name": "poNo",
+                            "type": "QString"
+                        }
+                    ],
+                    "name": "purchaseOrderCreated",
+                    "returnType": "void"
+                },
+                {
+                    "access": "public",
+                    "arguments": [
+                        {
+                            "name": "grnNo",
+                            "type": "QString"
+                        },
+                        {
+                            "name": "poNo",
+                            "type": "QString"
+                        }
+                    ],
+                    "name": "goodsReceived",
+                    "returnType": "void"
+                },
+                {
+                    "access": "public",
+                    "arguments": [
+                        {
+                            "name": "issueNo",
+                            "type": "QString"
+                        },
+                        {
+                            "name": "partName",
+                            "type": "QString"
+                        },
+                        {
+                            "name": "qty",
+                            "type": "int"
+                        }
+                    ],
+                    "name": "stockIssued",
+                    "returnType": "void"
+                },
+                {
+                    "access": "public",
+                    "arguments": [
+                        {
+                            "name": "partName",
+                            "type": "QString"
+                        },
+                        {
+                            "name": "type",
+                            "type": "QString"
+                        },
+                        {
+                            "name": "qty",
+                            "type": "int"
+                        }
+                    ],
+                    "name": "movementLogged",
+                    "returnType": "void"
+                }
+            ],
+            "slots": [
+                {
+                    "access": "private",
+                    "name": "onModelDataChanged",
+                    "returnType": "void"
+                },
+                {
+                    "access": "private",
+                    "name": "autoSavePermanent",
+                    "returnType": "void"
+                },
+                {
+                    "access": "private",
+                    "name": "autoSyncFromCloud",
+                    "returnType": "void"
+                }
+            ],
+            "superClasses": [
+                {
+                    "access": "public",
+                    "name": "QObject"
+                }
+            ]
+        }
+    ],
+    "inputFile": "excelhandler.h",
+    "outputRevision": 68
+}

@@ -1,0 +1,6 @@
+<RCC>
+  <qresource prefix="/Enstein/">
+    <file alias="Main.qml">/home/ensteinrobotsystem/Downloads/enstein_stock_manager-1.0.16/Main.qml</file>
+  </qresource>
+</RCC>
+

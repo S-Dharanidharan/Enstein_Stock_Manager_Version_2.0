@@ -1,0 +1,136 @@
+name: Build Windows and Linux (Qt)
+
+permissions:
+  contents: write
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+jobs:
+  build-windows:
+    name: Windows Release
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+
+      - name: Install Qt (shared + qttools)
+        uses: jurplel/install-qt-action@v3
+        with:
+          version: '6.10.1'
+          arch: win64_mingw
+          static: false
+
+      - name: Configure CMake
+        shell: bash
+        run: |
+          rm -rf build
+          mkdir build
+          cd build
+          cmake -G Ninja -DCMAKE_BUILD_TYPE=Release ..
+
+      - name: Build
+        shell: bash
+        run: |
+          cd build
+          cmake --build .
+
+      - name: Install + Deploy (Qt)
+        shell: bash
+        run: |
+          cd build
+          cmake --install . --prefix install
+
+      - name: Create Windows ZIP
+        shell: bash
+        run: |
+          cd build
+          powershell -Command "Compress-Archive -Path install/* -DestinationPath ../EnsteinStockManager-Windows.zip"
+
+      - name: Upload Windows artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-build
+          path: EnsteinStockManager-Windows.zip
+
+  build-linux:
+    name: Linux Release
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+
+      - name: Install Qt
+        uses: jurplel/install-qt-action@v3
+        with:
+          version: '6.10.1'
+          target: desktop
+
+      - name: Install system dependencies
+        run: |
+          sudo apt update
+          sudo apt install -y libxcb-cursor0
+
+      - name: Configure CMake
+        shell: bash
+        run: |
+          rm -rf build
+          mkdir build
+          cd build
+          cmake -DCMAKE_BUILD_TYPE=Release ..
+
+      - name: Build
+        shell: bash
+        run: |
+          cd build
+          make -j$(nproc)
+
+      - name: Install + Deploy (Qt)
+        shell: bash
+        run: |
+          cd build
+          cmake --install . --prefix install
+
+      - name: Create Linux tarball
+        shell: bash
+        run: |
+          cd build
+          tar -czf ../EnsteinStockManager-Linux.tar.gz -C install .
+
+      - name: Upload Linux artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-build
+          path: EnsteinStockManager-Linux.tar.gz
+
+  release:
+    name: Create GitHub Release
+    needs: [build-windows, build-linux]
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/')
+
+    steps:
+      - name: Download Windows artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: windows-build
+
+      - name: Download Linux artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: linux-build
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v1
+        with:
+          files: |
+            EnsteinStockManager-Windows.zip
+            EnsteinStockManager-Linux.tar.gz
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
