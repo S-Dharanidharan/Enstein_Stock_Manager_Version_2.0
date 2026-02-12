@@ -99,12 +99,13 @@ jobs:
           wget -q https://github.com/probonopd/linuxdeployqt/releases/download/continuous/linuxdeployqt-continuous-x86_64.AppImage
           chmod +x linuxdeployqt-continuous-x86_64.AppImage
           ./linuxdeployqt-continuous-x86_64.AppImage --appimage-extract
+          chmod +x squashfs-root/AppRun
 
       - name: Create Linux AppImage
         shell: bash
         run: |
           cd build
-          ../squashfs-root/usr/bin/linuxdeployqt EnsteinStockManager -qmldir=.. -appimage
+          ../squashfs-root/AppRun EnsteinStockManager -qmldir=.. -appimage
           mv EnsteinStockManager-x86_64.AppImage ../EnsteinStockManager-Linux.AppImage
 
       - name: Upload Linux artifact
