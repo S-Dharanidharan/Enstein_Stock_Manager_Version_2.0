@@ -100,11 +100,37 @@ jobs:
           ./linuxdeployqt-continuous-x86_64.AppImage --appimage-extract
           chmod +x squashfs-root/AppRun
 
+      - name: Remove unsupported Qt plugin
+        shell: bash
+        run: |
+          # linuxdeployqt aborts if any Qt plugin has missing deps.
+          # Remove the Mimer SQL driver plugin (not used).
+          find "$GITHUB_WORKSPACE" -path "*plugins/sqldrivers/libqsqlmimer.so" -delete
+
+      - name: Create desktop file and icon
+        shell: bash
+        run: |
+          cd build
+          cat > EnsteinStockManager.desktop <<'EOF'
+          [Desktop Entry]
+          Type=Application
+          Name=Enstein Stock Manager
+          Exec=EnsteinStockManager
+          Icon=enstein-stock-manager
+          Categories=Office;
+          EOF
+          cat > enstein-stock-manager.svg <<'EOF'
+          <svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 256 256">
+            <rect width="256" height="256" fill="#1f3b57"/>
+            <text x="50%" y="54%" text-anchor="middle" font-family="Sans" font-size="56" fill="#ffffff">ESM</text>
+          </svg>
+          EOF
+
       - name: Create Linux AppImage
         shell: bash
         run: |
           cd build
-          ../squashfs-root/AppRun EnsteinStockManager -qmldir=.. -appimage
+          ../squashfs-root/AppRun EnsteinStockManager.desktop -qmldir=.. -appimage
           mv EnsteinStockManager-x86_64.AppImage ../EnsteinStockManager-Linux.AppImage
 
       - name: Upload Linux artifact
