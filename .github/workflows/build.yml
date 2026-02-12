@@ -105,7 +105,10 @@ jobs:
         run: |
           # linuxdeployqt aborts if any Qt plugin has missing deps.
           # Remove the Mimer SQL driver plugin (not used).
-          find "$GITHUB_WORKSPACE" -path "*plugins/sqldrivers/libqsqlmimer.so" -delete
+          find "$GITHUB_WORKSPACE" -path "*plugins/sqldrivers/libqsqlmimer.so" -delete || true
+          if [ -n "$Qt6_DIR" ]; then
+            find "$Qt6_DIR" -path "*plugins/sqldrivers/libqsqlmimer.so" -delete || true
+          fi
 
       - name: Create desktop file and icon
         shell: bash
@@ -125,12 +128,14 @@ jobs:
             <text x="50%" y="54%" text-anchor="middle" font-family="Sans" font-size="56" fill="#ffffff">ESM</text>
           </svg>
           EOF
+          mkdir -p icons/hicolor/256x256/apps
+          cp enstein-stock-manager.svg icons/hicolor/256x256/apps/enstein-stock-manager.svg
 
       - name: Create Linux AppImage
         shell: bash
         run: |
           cd build
-          ../squashfs-root/AppRun EnsteinStockManager.desktop -qmldir=.. -appimage
+          ../squashfs-root/AppRun EnsteinStockManager.desktop -qmldir=.. -appimage -no-copy-copyright-files
           mv EnsteinStockManager-x86_64.AppImage ../EnsteinStockManager-Linux.AppImage
 
       - name: Upload Linux artifact
