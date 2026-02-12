@@ -39,17 +39,19 @@ jobs:
           cd build
           cmake --build .
 
-      - name: Install + Deploy (Qt)
+      - name: Deploy Qt (windeployqt)
         shell: bash
         run: |
           cd build
-          cmake --install . --prefix install
+          mkdir -p package
+          cp EnsteinStockManager.exe package/
+          windeployqt package/EnsteinStockManager.exe --qmldir ..
 
       - name: Create Windows ZIP
         shell: bash
         run: |
           cd build
-          powershell -Command "Compress-Archive -Path install/* -DestinationPath ../EnsteinStockManager-Windows.zip"
+          powershell -Command "Compress-Archive -Path package/* -DestinationPath ../EnsteinStockManager-Windows.zip"
 
       - name: Upload Windows artifact
         uses: actions/upload-artifact@v4
@@ -90,23 +92,26 @@ jobs:
           cd build
           make -j$(nproc)
 
-      - name: Install + Deploy (Qt)
+      - name: Install linuxdeployqt
         shell: bash
         run: |
-          cd build
-          cmake --install . --prefix install
+          cd ..
+          wget -q https://github.com/probonopd/linuxdeployqt/releases/download/continuous/linuxdeployqt-continuous-x86_64.AppImage
+          chmod +x linuxdeployqt-continuous-x86_64.AppImage
+          ./linuxdeployqt-continuous-x86_64.AppImage --appimage-extract
 
-      - name: Create Linux tarball
+      - name: Create Linux AppImage
         shell: bash
         run: |
           cd build
-          tar -czf ../EnsteinStockManager-Linux.tar.gz -C install .
+          ../squashfs-root/usr/bin/linuxdeployqt EnsteinStockManager -qmldir=.. -appimage
+          mv EnsteinStockManager-x86_64.AppImage ../EnsteinStockManager-Linux.AppImage
 
       - name: Upload Linux artifact
         uses: actions/upload-artifact@v4
         with:
           name: linux-build
-          path: EnsteinStockManager-Linux.tar.gz
+          path: EnsteinStockManager-Linux.AppImage
 
   release:
     name: Create GitHub Release
@@ -130,7 +135,6 @@ jobs:
         with:
           files: |
             EnsteinStockManager-Windows.zip
-            EnsteinStockManager-Linux.tar.gz
+            EnsteinStockManager-Linux.AppImage
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
