@@ -46,11 +46,20 @@ qt_add_qml_module(EnsteinStockManager
 # Generate a deploy script when available (Qt 6.2+). This helps bundle
 # Qt runtime and QML imports during install for Windows/Linux releases.
 if (COMMAND qt_generate_deploy_qml_app_script)
-    qt_generate_deploy_qml_app_script(
-        TARGET EnsteinStockManager
-        FILENAME_VARIABLE deploy_script
-        NO_UNSUPPORTED_PLATFORM_ERROR
-    )
+    # Qt 6.10+ uses OUTPUT_SCRIPT, older versions use FILENAME_VARIABLE.
+    if (Qt6_VERSION VERSION_GREATER_EQUAL "6.10")
+        qt_generate_deploy_qml_app_script(
+            TARGET EnsteinStockManager
+            OUTPUT_SCRIPT deploy_script
+            NO_UNSUPPORTED_PLATFORM_ERROR
+        )
+    else()
+        qt_generate_deploy_qml_app_script(
+            TARGET EnsteinStockManager
+            FILENAME_VARIABLE deploy_script
+            NO_UNSUPPORTED_PLATFORM_ERROR
+        )
+    endif()
 endif()
 
 set_target_properties(EnsteinStockManager PROPERTIES
