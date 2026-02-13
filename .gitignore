@@ -1,2 +1,4 @@
 build/
+build_check/
+cmake-build*/
 *.user

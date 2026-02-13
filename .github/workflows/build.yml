@@ -18,7 +18,7 @@ jobs:
       - name: Checkout source
         uses: actions/checkout@v4
 
-      - name: Install Qt (shared + qttools)
+      - name: Install Qt
         uses: jurplel/install-qt-action@v3
         with:
           version: '6.10.1'
@@ -43,15 +43,13 @@ jobs:
         shell: bash
         run: |
           cd build
-          mkdir -p package
-          cp EnsteinStockManager.exe package/
-          windeployqt package/EnsteinStockManager.exe --qmldir ..
+          windeployqt EnsteinStockManager.exe --qmldir ..
 
       - name: Create Windows ZIP
-        shell: bash
+        shell: pwsh
         run: |
           cd build
-          powershell -Command "Compress-Archive -Path package/* -DestinationPath ../EnsteinStockManager-Windows.zip"
+          Compress-Archive -Path * -DestinationPath ../EnsteinStockManager-Windows.zip
 
       - name: Upload Windows artifact
         uses: actions/upload-artifact@v4
@@ -60,8 +58,8 @@ jobs:
           path: EnsteinStockManager-Windows.zip
 
   build-linux:
-    name: Linux Release
-    runs-on: ubuntu-22.04
+    name: Linux AppImage
+    runs-on: ubuntu-latest
 
     steps:
       - name: Checkout source
@@ -76,7 +74,7 @@ jobs:
       - name: Install system dependencies
         run: |
           sudo apt update
-          sudo apt install -y libxcb-cursor0
+          sudo apt install -y libxcb-cursor0 libfuse2 wget file
 
       - name: Configure CMake
         shell: bash
@@ -92,57 +90,49 @@ jobs:
           cd build
           make -j$(nproc)
 
-      - name: Install linuxdeployqt
-        shell: bash
+      - name: Create app metadata
         run: |
-          wget -q https://github.com/probonopd/linuxdeployqt/releases/download/continuous/linuxdeployqt-continuous-x86_64.AppImage
-          chmod +x linuxdeployqt-continuous-x86_64.AppImage
-          ./linuxdeployqt-continuous-x86_64.AppImage --appimage-extract
-          chmod +x squashfs-root/AppRun
+          mkdir -p AppDir/usr/bin
+          mkdir -p AppDir/usr/share/applications
+          mkdir -p AppDir/usr/share/icons/hicolor/256x256/apps
 
-      - name: Remove unsupported Qt plugin
-        shell: bash
-        run: |
-          # linuxdeployqt aborts if any Qt plugin has missing deps.
-          # Remove the Mimer SQL driver plugin (not used).
-          find "$GITHUB_WORKSPACE" -path "*plugins/sqldrivers/libqsqlmimer.so" -delete || true
-          if [ -n "$Qt6_DIR" ]; then
-            find "$Qt6_DIR" -path "*plugins/sqldrivers/libqsqlmimer.so" -delete || true
-          fi
+          cp build/EnsteinStockManager AppDir/usr/bin/
 
-      - name: Create desktop file and icon
-        shell: bash
-        run: |
-          cd build
-          cat > EnsteinStockManager.desktop <<'EOF'
+          cat > AppDir/usr/share/applications/enstein-stock.desktop << 'DESKTOP'
           [Desktop Entry]
           Type=Application
           Name=Enstein Stock Manager
+          Comment=Professional Stock Management System
           Exec=EnsteinStockManager
-          Icon=enstein-stock-manager
-          Categories=Office;
-          EOF
-          cat > enstein-stock-manager.svg <<'EOF'
+          Icon=enstein-stock
+          Categories=Office;Finance;
+          Terminal=false
+          DESKTOP
+
+          cat > AppDir/usr/share/icons/hicolor/256x256/apps/enstein-stock.svg << 'ICON'
           <svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 256 256">
             <rect width="256" height="256" fill="#1f3b57"/>
             <text x="50%" y="54%" text-anchor="middle" font-family="Sans" font-size="56" fill="#ffffff">ESM</text>
           </svg>
-          EOF
-          mkdir -p icons/hicolor/256x256/apps
-          cp enstein-stock-manager.svg icons/hicolor/256x256/apps/enstein-stock-manager.svg
+          ICON
 
-      - name: Create Linux AppImage
-        shell: bash
+      - name: Build AppImage
         run: |
-          cd build
-          ../squashfs-root/AppRun EnsteinStockManager.desktop -qmldir=.. -appimage -no-copy-copyright-files
-          mv EnsteinStockManager-x86_64.AppImage ../EnsteinStockManager-Linux.AppImage
+          wget -q https://github.com/linuxdeploy/linuxdeploy/releases/download/continuous/linuxdeploy-x86_64.AppImage
+          wget -q https://github.com/linuxdeploy/linuxdeploy-plugin-qt/releases/download/continuous/linuxdeploy-plugin-qt-x86_64.AppImage
+          chmod +x linuxdeploy*.AppImage
 
-      - name: Upload Linux artifact
+          export QML_SOURCES_PATHS=$PWD
+          ./linuxdeploy-x86_64.AppImage \
+            --appdir AppDir \
+            --plugin qt \
+            --output appimage
+
+      - name: Upload Linux AppImage
         uses: actions/upload-artifact@v4
         with:
-          name: linux-build
-          path: EnsteinStockManager-Linux.AppImage
+          name: linux-appimage
+          path: Enstein_Stock_Manager-*.AppImage
 
   release:
     name: Create GitHub Release
@@ -156,16 +146,16 @@ jobs:
         with:
           name: windows-build
 
-      - name: Download Linux artifact
+      - name: Download Linux AppImage
         uses: actions/download-artifact@v4
         with:
-          name: linux-build
+          name: linux-appimage
 
       - name: Create Release
         uses: softprops/action-gh-release@v1
         with:
           files: |
             EnsteinStockManager-Windows.zip
-            EnsteinStockManager-Linux.AppImage
+            Enstein_Stock_Manager-*.AppImage
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
