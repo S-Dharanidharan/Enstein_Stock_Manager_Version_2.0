@@ -43,6 +43,9 @@ jobs:
         shell: bash
         run: |
           cd build
+          if [ -f ../assets/app-icon.png ]; then
+            cp ../assets/app-icon.png app-icon.png
+          fi
           windeployqt EnsteinStockManager.exe --qmldir ..
 
       - name: Create Windows ZIP
@@ -59,7 +62,7 @@ jobs:
 
   build-linux:
     name: Linux AppImage
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
 
     steps:
       - name: Checkout source
@@ -109,12 +112,16 @@ jobs:
           Terminal=false
           DESKTOP
 
-          cat > AppDir/usr/share/icons/hicolor/256x256/apps/enstein-stock.svg << 'ICON'
-          <svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 256 256">
-            <rect width="256" height="256" fill="#1f3b57"/>
-            <text x="50%" y="54%" text-anchor="middle" font-family="Sans" font-size="56" fill="#ffffff">ESM</text>
-          </svg>
-          ICON
+          if [ -f assets/app-icon.png ]; then
+            cp assets/app-icon.png AppDir/usr/share/icons/hicolor/256x256/apps/enstein-stock.png
+          else
+            cat > AppDir/usr/share/icons/hicolor/256x256/apps/enstein-stock.svg << 'ICON'
+            <svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 256 256">
+              <rect width="256" height="256" fill="#1f3b57"/>
+              <text x="50%" y="54%" text-anchor="middle" font-family="Sans" font-size="56" fill="#ffffff">ESM</text>
+            </svg>
+            ICON
+          fi
 
       - name: Build AppImage
         run: |
@@ -127,6 +134,12 @@ jobs:
             --appdir AppDir \
             --plugin qt \
             --output appimage
+
+      - name: Validate AppImage
+        run: |
+          APPIMAGE="$(ls -1 Enstein_Stock_Manager-*.AppImage | head -n1)"
+          chmod +x "$APPIMAGE"
+          "./$APPIMAGE" --appimage-version
 
       - name: Upload Linux AppImage
         uses: actions/upload-artifact@v4

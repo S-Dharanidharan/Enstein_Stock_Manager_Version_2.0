@@ -17,6 +17,17 @@ ApplicationWindow {
     property int contextRow: -1
     property string fileType: "stock"
     property int tableRefreshToken: 0
+    property var tableBaseWidths: [350, 190, 130, 200, 180, 200, 260, 190, 140]
+    property var tableMinWidths: [140, 90, 70, 90, 90, 90, 110, 90, 80]
+
+    function columnWidth(colIndex) {
+        var available = Math.max(800, tableHeader.width - 40)
+        var baseTotal = 0
+        for (var i = 0; i < tableBaseWidths.length; i++) baseTotal += tableBaseWidths[i]
+        var scale = available / baseTotal
+        var width = Math.round(tableBaseWidths[colIndex] * scale)
+        return Math.max(tableMinWidths[colIndex], width)
+    }
 
     title: {
         var fileName = "Untitled"
@@ -2262,6 +2273,7 @@ ApplicationWindow {
 
         // Column Headers (9 columns)
         Rectangle {
+            id: tableHeader
             Layout.fillWidth: true; Layout.preferredHeight: 35; color: "#2c3e50"
 
             Row {
@@ -2276,11 +2288,7 @@ ApplicationWindow {
                     model: 9
 
                     Rectangle {
-                        width: {
-                            //var widths = [200, 120, 80, 120, 120, 120, 180, 140, 90]
-                            var widths = [350, 190, 130, 200, 180, 200, 260, 190, 140]
-                            return widths[index]
-                        }
+                        width: root.columnWidth(index)
                         height: 35; color: "#34495e"; border.color: "#2c3e50"
 
                         Text {
@@ -2340,10 +2348,7 @@ ApplicationWindow {
                         model: 9
 
                         Rectangle {
-                            width: {
-                                var widths = [350, 190, 130, 200, 180, 200, 260, 190, 140]
-                                return widths[index]
-                            }
+                            width: root.columnWidth(index)
                             height: 32
                             color: {
                                 var _refresh = root.tableRefreshToken
