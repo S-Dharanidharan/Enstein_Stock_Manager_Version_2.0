@@ -115,12 +115,12 @@ jobs:
           if [ -f assets/app-icon.png ]; then
             cp assets/app-icon.png AppDir/usr/share/icons/hicolor/256x256/apps/enstein-stock.png
           else
-            cat > AppDir/usr/share/icons/hicolor/256x256/apps/enstein-stock.svg << 'ICON'
-            <svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 256 256">
-              <rect width="256" height="256" fill="#1f3b57"/>
-              <text x="50%" y="54%" text-anchor="middle" font-family="Sans" font-size="56" fill="#ffffff">ESM</text>
-            </svg>
-            ICON
+            printf '%s\n' \
+              '<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 256 256">' \
+              '  <rect width="256" height="256" fill="#1f3b57"/>' \
+              '  <text x="50%" y="54%" text-anchor="middle" font-family="Sans" font-size="56" fill="#ffffff">ESM</text>' \
+              '</svg>' \
+              > AppDir/usr/share/icons/hicolor/256x256/apps/enstein-stock.svg
           fi
 
       - name: Build AppImage
