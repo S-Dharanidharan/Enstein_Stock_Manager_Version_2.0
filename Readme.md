@@ -1,6 +1,6 @@
 # Enstein Stock Manager
 
-**Version:** 1.0.0  
+**Version:** 2.1.4  
 **Company:** Enstein Robots and Automations Pvt Limited
 
 A professional inventory management application built with Qt6 and QML.
@@ -147,17 +147,29 @@ cmake --build . -j$(nproc)
 | `syncToCloud()` | Upload to cloud |
 | `syncFromCloud()` | Download from cloud |
 
-## Release Builds (GitHub Actions)
+## Downloads
 
-This repo includes a GitHub Actions workflow that builds Windows and Linux releases.
+Grab a build from the [Releases](../../releases) page.
 
-1. Push a tag like `v2.0.0`.
-2. The workflow builds both platforms and attaches:
-   - `EnsteinStockManager-Windows.zip`
-   - `EnsteinStockManager-Linux.tar.gz`
+**Windows** — both `.exe` files are self-contained. The Qt runtime, QML modules,
+SQL drivers and PostgreSQL client libraries all travel inside them, so the
+target machine needs nothing preinstalled.
 
-The Linux package is a portable folder with Qt runtime + QML imports. The Windows ZIP
-contains the deployed `.exe` with Qt runtime.
+- `EnsteinStockManager-Setup-<version>.exe` — installer. Start Menu entry,
+  desktop icon, uninstaller, clean upgrades. Use this for normal deployment.
+- `EnsteinStockManager-Portable-<version>.exe` — **one file, no install**. Copy
+  it to any 64-bit Windows machine and double-click. Needs no admin rights.
+- `EnsteinStockManager-Windows-<version>.zip` — the plain deployed folder.
+
+**Linux** — `Enstein_Stock_Manager-<version>-x86_64.AppImage`. `chmod +x` it and run.
+
+On first launch Windows SmartScreen warns about the unsigned binary; choose
+*More info -> Run anyway*. See [docs/RELEASING.md](docs/RELEASING.md) for how to
+cut a release and how to add code signing.
+
+Your data is not stored next to the exe. The local SQLite fallback database
+lives under `%APPDATA%\Enstein Robots and Automations Pvt Limited\Enstein Stock Manager\`,
+so it survives upgrades and works from a read-only install location.
 
 ## Troubleshooting
 
