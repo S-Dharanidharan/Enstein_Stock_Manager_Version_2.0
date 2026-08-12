@@ -209,6 +209,25 @@ public:
     Q_INVOKABLE bool updatePurchaseOrder(const QString &poNo, const QVariantMap &poDetails);
     Q_INVOKABLE QVariantMap getPOByNumber(const QString &poNo);
     Q_INVOKABLE QString getNextPONumber();
+
+    // ---- Printable purchase order ----
+    // Company details that head every printed document. Stored in QSettings so
+    // they survive reinstalls and are shared by every document type.
+    Q_INVOKABLE QVariantMap getCompanyProfile() const;
+    Q_INVOKABLE bool saveCompanyProfile(const QVariantMap &profile);
+
+    // Renders the PO to a PDF in a temp folder and rasterises its pages for the
+    // preview dialog. Returns { poNo, pdfPath, pages: [image urls] }, or an
+    // empty map if the PO could not be found or rendered.
+    Q_INVOKABLE QVariantMap generatePOPreview(const QString &poNo,
+                                              const QString &comments = QString());
+    // Writes the PO PDF to its permanent home. An empty destPath uses
+    // defaultPOPdfPath(). Returns the saved path, or "" on failure.
+    Q_INVOKABLE QString savePOPdf(const QString &poNo,
+                                  const QString &destPath = QString(),
+                                  const QString &comments = QString());
+    Q_INVOKABLE QString defaultPOPdfPath(const QString &poNo) const;
+    Q_INVOKABLE bool openInSystemViewer(const QString &path);
     int pendingPOCount() const;
 
     // ---- Goods Receipt Note (GRN) ----
@@ -359,6 +378,7 @@ private:
     // Resolves blanks in a PO line from the item master; returns false with
     // an error emitted when validation fails.
     bool resolvePOLine(QVariantMap &line);
+    QString buildPOHtml(const QString &poNo, const QString &comments) const;
     void loadStockMovements();
     void saveStockMovements();
     void loadIssueNotes();

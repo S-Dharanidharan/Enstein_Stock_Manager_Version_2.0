@@ -1,4 +1,5 @@
 #include "excelhandler.h"
+#include "podocument.h"
 #include "dbmanager.h"
 #include "serversetup.h"
 #include <QFileDialog>
@@ -888,6 +889,149 @@ bool ExcelHandler::resolvePOLine(QVariantMap &line)
     line["totalAmount"] = line["qty"].toInt() * line["unitPrice"].toDouble();
     line["receivedQty"] = 0;
     return true;
+}
+
+// ===================== PRINTABLE PURCHASE ORDER ======================
+
+QVariantMap ExcelHandler::getCompanyProfile() const
+{
+    QSettings settings("EinsteinRobotics", "StockManager");
+    settings.beginGroup("company");
+    QVariantMap p;
+    p["name"]         = settings.value("name", "Enstein Robots and Automations Pvt Limited");
+    p["addressLine1"] = settings.value("addressLine1", "");
+    p["addressLine2"] = settings.value("addressLine2", "");
+    p["city"]         = settings.value("city", "");
+    p["phone"]        = settings.value("phone", "");
+    p["email"]        = settings.value("email", "");
+    p["website"]      = settings.value("website", "");
+    p["gstin"]        = settings.value("gstin", "");
+    settings.endGroup();
+    return p;
+}
+
+bool ExcelHandler::saveCompanyProfile(const QVariantMap &profile)
+{
+    QSettings settings("EinsteinRobotics", "StockManager");
+    settings.beginGroup("company");
+    for (const QString &key : {"name", "addressLine1", "addressLine2", "city",
+                               "phone", "email", "website", "gstin"}) {
+        settings.setValue(key, profile.value(key).toString().trimmed());
+    }
+    settings.endGroup();
+    settings.sync();
+    return settings.status() == QSettings::NoError;
+}
+
+QString ExcelHandler::buildPOHtml(const QString &poNo, const QString &comments) const
+{
+    QVariantMap po;
+    for (const auto &row : m_purchaseOrders) {
+        if (row["poNo"].toString() == poNo) { po = row; break; }
+    }
+    if (po.isEmpty())
+        return QString();
+
+    QVariantList items;
+    QSet<QString> vendorNames;
+    for (const auto &line : m_poItems) {
+        if (line["poNo"].toString() != poNo) continue;
+        items.append(line);
+        const QString v = line["vendor"].toString().trimmed();
+        if (!v.isEmpty()) vendorNames.insert(v);
+    }
+
+    // A PO raised against a single vendor gets that vendor's full address
+    // block; a mixed-vendor order can only sensibly list the names.
+    QVariantMap vendor;
+    if (vendorNames.size() == 1) {
+        const QString only = *vendorNames.constBegin();
+        for (const auto &v : m_vendors) {
+            if (v["vendorName"].toString().compare(only, Qt::CaseInsensitive) == 0) {
+                vendor = v;
+                break;
+            }
+        }
+        if (vendor.isEmpty()) vendor["vendorName"] = only;
+    } else if (!vendorNames.isEmpty()) {
+        QStringList names(vendorNames.constBegin(), vendorNames.constEnd());
+        names.sort();
+        vendor["vendorName"] = names.join(", ");
+    }
+
+    return PoDocument::buildHtml(getCompanyProfile(), vendor, po, items, comments);
+}
+
+QString ExcelHandler::defaultPOPdfPath(const QString &poNo) const
+{
+    const QString base = QStandardPaths::writableLocation(QStandardPaths::DocumentsLocation);
+    return base + "/Enstein Stock Manager/Purchase Orders/" + poNo + ".pdf";
+}
+
+QVariantMap ExcelHandler::generatePOPreview(const QString &poNo, const QString &comments)
+{
+    const QString html = buildPOHtml(poNo, comments);
+    if (html.isEmpty()) {
+        emit errorOccurred("Purchase order not found: " + poNo);
+        return QVariantMap();
+    }
+
+    // A per-PO scratch folder, wiped first so a re-preview never shows pages
+    // left over from an earlier render.
+    const QString dir = QStandardPaths::writableLocation(QStandardPaths::TempLocation)
+                        + "/EnsteinStockManager/po-preview/" + poNo;
+    QDir(dir).removeRecursively();
+    QDir().mkpath(dir);
+
+    const QString pdfPath = dir + "/" + poNo + ".pdf";
+    if (!PoDocument::writePdf(html, pdfPath)) {
+        emit errorOccurred("Could not render the purchase order PDF");
+        return QVariantMap();
+    }
+
+    QStringList pageUrls;
+    for (const QString &f : PoDocument::renderPages(html, dir))
+        pageUrls << QUrl::fromLocalFile(f).toString();
+
+    QVariantMap result;
+    result["poNo"]    = poNo;
+    result["pdfPath"] = pdfPath;
+    result["pages"]   = pageUrls;
+    return result;
+}
+
+QString ExcelHandler::savePOPdf(const QString &poNo, const QString &destPath,
+                                const QString &comments)
+{
+    const QString html = buildPOHtml(poNo, comments);
+    if (html.isEmpty()) {
+        emit errorOccurred("Purchase order not found: " + poNo);
+        return QString();
+    }
+
+    QString target = destPath.trimmed();
+    if (target.startsWith("file://"))
+        target = QUrl(target).toLocalFile();
+    if (target.isEmpty())
+        target = defaultPOPdfPath(poNo);
+    if (!target.endsWith(".pdf", Qt::CaseInsensitive))
+        target += ".pdf";
+
+    if (!PoDocument::writePdf(html, target)) {
+        emit errorOccurred("Could not save the purchase order to " + target);
+        return QString();
+    }
+    return target;
+}
+
+bool ExcelHandler::openInSystemViewer(const QString &path)
+{
+    QString local = path.trimmed();
+    if (local.startsWith("file://"))
+        local = QUrl(local).toLocalFile();
+    if (!QFile::exists(local))
+        return false;
+    return QDesktopServices::openUrl(QUrl::fromLocalFile(local));
 }
 
 QString ExcelHandler::getNextPONumber()

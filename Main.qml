@@ -699,14 +699,142 @@ ApplicationWindow {
         if (details !== undefined && details !== null) {
             poUnitPriceField.text = formatAmount(details.unitPrice)
             poDepartmentField.text = details.department || ""
+            poDepartmentAutoFilled = true
             // Auto-select the vendor that belongs to this item (from the
             // Item Master); the user can still change it before adding.
             if ((details.vendor || "").toString().trim() !== "") {
                 poVendorField.editText = details.vendor
             }
-        } else {
+        } else if (poDepartmentAutoFilled) {
+            // Part is not in the Item Master. Only clear a department we filled
+            // in ourselves, never one the user typed for a one-off item.
             poDepartmentField.text = ""
         }
+    }
+
+    // ---- Printable purchase order ----
+
+    property string poPreviewPoNo: ""
+    property var poPreviewPages: []
+    property string poPreviewPdfPath: ""
+
+    function openPoPdfPreview(poNo) {
+        poPreviewPoNo = poNo
+        poPreviewCommentsField.text = ""
+        refreshPoPdfPreview()
+        if (poPreviewPages.length > 0)
+            poPdfPreviewDialog.open()
+    }
+
+    function refreshPoPdfPreview() {
+        var result = excelHandler.generatePOPreview(poPreviewPoNo,
+                                                    poPreviewCommentsField.text)
+        if (!result || !result.pages || result.pages.length === 0) {
+            poPreviewPages = []
+            poPreviewPdfPath = ""
+            statusLabel.text = "Could not render the purchase order PDF"
+            statusTimer.restart()
+            return
+        }
+        poPreviewPages = result.pages
+        poPreviewPdfPath = result.pdfPath
+    }
+
+    function sendPoPdf() {
+        var saved = excelHandler.savePOPdf(poPreviewPoNo, "",
+                                           poPreviewCommentsField.text)
+        if (saved === "") return
+        poLastSavedPdf = saved
+        statusLabel.text = "Purchase order saved to " + saved
+        statusTimer.restart()
+        poPdfPreviewDialog.close()
+        poSavedDialog.open()
+    }
+
+    property string poLastSavedPdf: ""
+
+    // ---- Searchable pickers for the PO line entry ----
+    //
+    // The plain dropdowns stop being usable once the Item Master or vendor list
+    // grows past a screenful, so both fields also get a search dialog that
+    // filters across every field, not just the name.
+
+    ListModel { id: poPartPickerModel }
+    ListModel { id: poVendorPickerModel }
+
+    function refreshPoPartPicker(filter) {
+        poPartPickerModel.clear()
+        var f = (filter || "").toString().trim().toLowerCase()
+        var items = excelHandler.getItemMasterList()
+        for (var i = 0; i < items.length; i++) {
+            var it = items[i]
+            var partName = (it.partName || "").toString()
+            if (partName.trim() === "") continue
+            var dept = (it.department || it.category || "").toString()
+            var partNo = (it.partNo || "").toString()
+            var vendor = (it.vendor || "").toString()
+            if (f !== "" &&
+                (partName + " " + partNo + " " + dept + " " + vendor).toLowerCase().indexOf(f) === -1)
+                continue
+            poPartPickerModel.append({
+                partName: partName, partNo: partNo, department: dept, vendor: vendor,
+                unitPrice: it.unitPrice || 0,
+                requiredQty: it.requiredQty || it.stockQty || 0
+            })
+        }
+    }
+
+    function refreshPoVendorPicker(filter) {
+        poVendorPickerModel.clear()
+        var f = (filter || "").toString().trim().toLowerCase()
+        var vendors = excelHandler.getVendorList()
+        for (var i = 0; i < vendors.length; i++) {
+            var v = vendors[i]
+            var name = (v.name || "").toString()
+            if (name.trim() === "") continue
+            var phone = (v.phone || "").toString()
+            var email = (v.email || "").toString()
+            var contact = (v.contactPerson || "").toString()
+            var gstin = (v.gstin || "").toString()
+            if (f !== "" &&
+                (name + " " + phone + " " + email + " " + contact + " " + gstin).toLowerCase().indexOf(f) === -1)
+                continue
+            poVendorPickerModel.append({
+                name: name, phone: phone, email: email,
+                contactPerson: contact, gstin: gstin
+            })
+        }
+    }
+
+    function openPoPartPicker() {
+        poPartSearchField.text = ""
+        refreshPoPartPicker("")
+        poPartPickerDialog.open()
+        poPartSearchField.forceActiveFocus()
+    }
+
+    function openPoVendorPicker() {
+        poVendorSearchField.text = ""
+        refreshPoVendorPicker("")
+        poVendorPickerDialog.open()
+        poVendorSearchField.forceActiveFocus()
+    }
+
+    function choosePoPart(partName) {
+        // Prefer selecting the real dropdown entry so the ComboBox stays in
+        // sync; fall back to free text for anything not in the Item Master.
+        var idx = poPartNameField.find(partName)
+        if (idx >= 0) poPartNameField.currentIndex = idx
+        else poPartNameField.editText = partName
+        applyPoPartDetails(partName)
+        poPartPickerDialog.close()
+    }
+
+    function choosePoVendor(name) {
+        var idx = poVendorField.find(name)
+        if (idx >= 0) poVendorField.currentIndex = idx
+        else poVendorField.editText = name
+        poVendorPickerDialog.close()
     }
 
     Connections {
@@ -962,6 +1090,9 @@ ApplicationWindow {
 
     property var poPartLookup: ({})
     property var poPartDetailsLookup: ({})
+    // False once the user types a department by hand, which stops the Item
+    // Master autofill from clearing it out from under them.
+    property bool poDepartmentAutoFilled: true
     property var selectedPoPartDetails: ({})
     property var selectedPODetails: ({})
     property var selectedPOItems: []
@@ -1069,6 +1200,7 @@ ApplicationWindow {
         poPartNameField.editText = ""
         poPartNoField.text = ""
         poDepartmentField.text = ""
+        poDepartmentAutoFilled = true
         poVendorField.currentIndex = -1
         poVendorField.editText = ""
         poQtyField.value = 1
@@ -1134,6 +1266,12 @@ ApplicationWindow {
                             }
                         }
                         Button {
+                            text: "\u{1F50D}"
+                            ToolTip.visible: hovered
+                            ToolTip.text: "Search the Item Master"
+                            onClicked: openPoPartPicker()
+                        }
+                        Button {
                             text: "i"
                             font.bold: true
                             ToolTip.visible: hovered
@@ -1142,13 +1280,31 @@ ApplicationWindow {
                         }
                     }
                     Label { text: "Vendor*:" }
-                    ComboBox {
-                        id: poVendorField; Layout.fillWidth: true; editable: true
-                        model: excelHandler.getVendorNames()
+                    RowLayout {
+                        Layout.fillWidth: true
+                        ComboBox {
+                            id: poVendorField; Layout.fillWidth: true; editable: true
+                            model: excelHandler.getVendorNames()
+                        }
+                        Button {
+                            text: "\u{1F50D}"
+                            ToolTip.visible: hovered
+                            ToolTip.text: "Search vendors"
+                            onClicked: openPoVendorPicker()
+                        }
                     }
 
                     Label { text: "Part No:" } TextField { id: poPartNoField; Layout.fillWidth: true; placeholderText: "Part number" }
-                    Label { text: "Department:" } TextField { id: poDepartmentField; Layout.fillWidth: true; readOnly: true; placeholderText: "Auto from Item Master" }
+                    Label { text: "Department:" }
+                    TextField {
+                        id: poDepartmentField
+                        Layout.fillWidth: true
+                        selectByMouse: true
+                        placeholderText: "Auto-filled from Item Master, or type one"
+                        // textEdited fires only on user input, so the autofill
+                        // above does not count as the user claiming the field.
+                        onTextEdited: poDepartmentAutoFilled = false
+                    }
 
                     Label { text: "Qty*:" } SpinBox { id: poQtyField; from: 1; to: 100000; value: 1; editable: true }
                     Label { text: "Unit Price:" }
@@ -1257,6 +1413,7 @@ ApplicationWindow {
                             recalcPoCartTotal()
                             poExpectedField.text = ""
                             refreshPOList()
+                            openPoPdfPreview(poNo)
                         }
                     }
                 }
@@ -1555,6 +1712,351 @@ ApplicationWindow {
             Label { text: "Received By: " + (selectedPODetails.receivedBy || "-") }
             Label { text: "Received Date: " + (selectedPODetails.receivedDate || "-") }
             Label { text: "Received Qty: " + (selectedPODetails.receivedQty || 0) + " / " + (selectedPODetails.qty || 0) }
+        }
+    }
+
+    Dialog {
+        id: poPdfPreviewDialog
+        title: "Purchase Order " + poPreviewPoNo
+        modal: true
+        anchors.centerIn: parent
+        width: Math.min(root.width - 80, 940)
+        height: Math.min(root.height - 60, 900)
+        standardButtons: Dialog.NoButton
+
+        ColumnLayout {
+            anchors.fill: parent
+            spacing: 8
+
+            RowLayout {
+                Layout.fillWidth: true
+                spacing: 8
+                Label { text: "Comments:" }
+                TextField {
+                    id: poPreviewCommentsField
+                    Layout.fillWidth: true
+                    placeholderText: "Optional special instructions printed on the order"
+                    selectByMouse: true
+                    // Re-render on commit rather than per keystroke; a full
+                    // re-layout per character would be wasteful.
+                    onEditingFinished: if (poPreviewPoNo !== "") refreshPoPdfPreview()
+                }
+            }
+
+            Rectangle {
+                Layout.fillWidth: true
+                Layout.fillHeight: true
+                color: "#525659"
+                radius: 4
+
+                ListView {
+                    id: poPreviewView
+                    anchors.fill: parent
+                    anchors.margins: 10
+                    clip: true
+                    spacing: 12
+                    model: poPreviewPages
+                    ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded }
+
+                    delegate: Rectangle {
+                        width: poPreviewView.width - 20
+                        // A4 aspect ratio, so the page keeps its proportions
+                        // whatever the dialog is resized to.
+                        height: width * 297 / 210
+                        color: "white"
+                        border.color: "#2c2c2c"
+
+                        Image {
+                            anchors.fill: parent
+                            source: modelData
+                            fillMode: Image.PreserveAspectFit
+                            smooth: true
+                            asynchronous: true
+                            cache: false
+                        }
+                    }
+                }
+            }
+
+            RowLayout {
+                Layout.fillWidth: true
+                spacing: 8
+
+                Label {
+                    text: poPreviewPages.length + (poPreviewPages.length === 1 ? " page" : " pages")
+                    font.pixelSize: 11
+                    color: "#7f8c8d"
+                }
+
+                Item { Layout.fillWidth: true }
+
+                Button {
+                    text: "Open in PDF viewer"
+                    onClicked: excelHandler.openInSystemViewer(poPreviewPdfPath)
+                }
+                Button {
+                    text: "Close"
+                    onClicked: poPdfPreviewDialog.close()
+                }
+                Button {
+                    text: "Send"
+                    highlighted: true
+                    ToolTip.visible: hovered
+                    ToolTip.text: "Save this purchase order as a PDF on this computer"
+                    onClicked: sendPoPdf()
+                }
+            }
+        }
+    }
+
+    Dialog {
+        id: poSavedDialog
+        title: "Purchase Order Saved"
+        modal: true
+        anchors.centerIn: parent
+        standardButtons: Dialog.Ok
+        width: 560
+
+        ColumnLayout {
+            anchors.fill: parent
+            spacing: 10
+            Label { text: "The purchase order PDF has been saved to:"; font.bold: true }
+            Label {
+                text: poLastSavedPdf
+                wrapMode: Text.WrapAnywhere
+                Layout.fillWidth: true
+                color: "#2c3e50"
+            }
+            Button {
+                text: "Open the file"
+                onClicked: excelHandler.openInSystemViewer(poLastSavedPdf)
+            }
+        }
+    }
+
+    Dialog {
+        id: companyProfileDialog
+        title: "Company Profile"
+        modal: true
+        anchors.centerIn: parent
+        standardButtons: Dialog.Save | Dialog.Cancel
+        width: 560
+
+        // These details head every printed purchase order, so they are worth
+        // filling in once before sending anything to a vendor.
+        onOpened: {
+            var c = excelHandler.getCompanyProfile()
+            companyNameField.text = c.name || ""
+            companyAddr1Field.text = c.addressLine1 || ""
+            companyAddr2Field.text = c.addressLine2 || ""
+            companyCityField.text = c.city || ""
+            companyPhoneField.text = c.phone || ""
+            companyEmailField.text = c.email || ""
+            companyWebsiteField.text = c.website || ""
+            companyGstinField.text = c.gstin || ""
+        }
+
+        onAccepted: {
+            excelHandler.saveCompanyProfile({
+                name: companyNameField.text,
+                addressLine1: companyAddr1Field.text,
+                addressLine2: companyAddr2Field.text,
+                city: companyCityField.text,
+                phone: companyPhoneField.text,
+                email: companyEmailField.text,
+                website: companyWebsiteField.text,
+                gstin: companyGstinField.text
+            })
+            statusLabel.text = "Company profile saved"
+            statusTimer.restart()
+        }
+
+        GridLayout {
+            anchors.fill: parent
+            columns: 2
+            columnSpacing: 10
+            rowSpacing: 8
+
+            Label { text: "Company Name:" }
+            TextField { id: companyNameField; Layout.fillWidth: true; selectByMouse: true }
+            Label { text: "Address Line 1:" }
+            TextField { id: companyAddr1Field; Layout.fillWidth: true; selectByMouse: true }
+            Label { text: "Address Line 2:" }
+            TextField { id: companyAddr2Field; Layout.fillWidth: true; selectByMouse: true }
+            Label { text: "City / State:" }
+            TextField { id: companyCityField; Layout.fillWidth: true; selectByMouse: true }
+            Label { text: "Phone:" }
+            TextField { id: companyPhoneField; Layout.fillWidth: true; selectByMouse: true }
+            Label { text: "Email:" }
+            TextField { id: companyEmailField; Layout.fillWidth: true; selectByMouse: true }
+            Label { text: "Website:" }
+            TextField { id: companyWebsiteField; Layout.fillWidth: true; selectByMouse: true }
+            Label { text: "GSTIN:" }
+            TextField { id: companyGstinField; Layout.fillWidth: true; selectByMouse: true }
+        }
+    }
+
+    Dialog {
+        id: poPartPickerDialog
+        title: "Search Item Master"
+        modal: true
+        anchors.centerIn: parent
+        standardButtons: Dialog.Cancel
+        width: 640
+        height: 520
+
+        ColumnLayout {
+            anchors.fill: parent
+            spacing: 8
+
+            TextField {
+                id: poPartSearchField
+                Layout.fillWidth: true
+                placeholderText: "Search by part name, part no, department or vendor..."
+                selectByMouse: true
+                onTextChanged: refreshPoPartPicker(text)
+                // Enter picks the top hit, so a search can be done without
+                // ever leaving the keyboard.
+                Keys.onReturnPressed: {
+                    if (poPartPickerModel.count > 0)
+                        choosePoPart(poPartPickerModel.get(0).partName)
+                }
+            }
+
+            Label {
+                text: poPartPickerModel.count + (poPartPickerModel.count === 1 ? " item" : " items")
+                font.pixelSize: 11
+                color: "#7f8c8d"
+            }
+
+            Rectangle {
+                Layout.fillWidth: true; Layout.fillHeight: true
+                border.color: "#dee2e6"; radius: 5
+
+                Label {
+                    anchors.centerIn: parent
+                    visible: poPartPickerModel.count === 0
+                    text: "No matching items"
+                    color: "#95a5a6"
+                }
+
+                ListView {
+                    id: poPartPickerView
+                    anchors.fill: parent; anchors.margins: 5; clip: true; spacing: 4
+                    model: poPartPickerModel
+                    ScrollBar.vertical: ScrollBar {}
+                    delegate: Rectangle {
+                        width: poPartPickerView.width - 10; height: 58
+                        color: partPickerMouse.containsMouse ? "#eaf4fd" : "#fff"
+                        border.color: "#e0e0e0"; radius: 4
+
+                        ColumnLayout {
+                            anchors.fill: parent; anchors.margins: 8; spacing: 2
+                            Label {
+                                text: model.partName + (model.partNo !== "" ? "  (" + model.partNo + ")" : "")
+                                font.bold: true; font.pixelSize: 13; color: "#2c3e50"
+                                elide: Text.ElideRight; Layout.fillWidth: true
+                            }
+                            Label {
+                                text: "Dept: " + (model.department !== "" ? model.department : "-")
+                                      + "  |  Vendor: " + (model.vendor !== "" ? model.vendor : "-")
+                                      + "  |  " + formatRupees(model.unitPrice)
+                                font.pixelSize: 11; color: "#7f8c8d"
+                                elide: Text.ElideRight; Layout.fillWidth: true
+                            }
+                        }
+
+                        MouseArea {
+                            id: partPickerMouse
+                            anchors.fill: parent
+                            hoverEnabled: true
+                            cursorShape: Qt.PointingHandCursor
+                            onClicked: choosePoPart(model.partName)
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    Dialog {
+        id: poVendorPickerDialog
+        title: "Search Vendors"
+        modal: true
+        anchors.centerIn: parent
+        standardButtons: Dialog.Cancel
+        width: 640
+        height: 520
+
+        ColumnLayout {
+            anchors.fill: parent
+            spacing: 8
+
+            TextField {
+                id: poVendorSearchField
+                Layout.fillWidth: true
+                placeholderText: "Search by name, contact person, phone, email or GSTIN..."
+                selectByMouse: true
+                onTextChanged: refreshPoVendorPicker(text)
+                Keys.onReturnPressed: {
+                    if (poVendorPickerModel.count > 0)
+                        choosePoVendor(poVendorPickerModel.get(0).name)
+                }
+            }
+
+            Label {
+                text: poVendorPickerModel.count + (poVendorPickerModel.count === 1 ? " vendor" : " vendors")
+                font.pixelSize: 11
+                color: "#7f8c8d"
+            }
+
+            Rectangle {
+                Layout.fillWidth: true; Layout.fillHeight: true
+                border.color: "#dee2e6"; radius: 5
+
+                Label {
+                    anchors.centerIn: parent
+                    visible: poVendorPickerModel.count === 0
+                    text: "No matching vendors"
+                    color: "#95a5a6"
+                }
+
+                ListView {
+                    id: poVendorPickerView
+                    anchors.fill: parent; anchors.margins: 5; clip: true; spacing: 4
+                    model: poVendorPickerModel
+                    ScrollBar.vertical: ScrollBar {}
+                    delegate: Rectangle {
+                        width: poVendorPickerView.width - 10; height: 58
+                        color: vendorPickerMouse.containsMouse ? "#eaf4fd" : "#fff"
+                        border.color: "#e0e0e0"; radius: 4
+
+                        ColumnLayout {
+                            anchors.fill: parent; anchors.margins: 8; spacing: 2
+                            Label {
+                                text: model.name
+                                font.bold: true; font.pixelSize: 13; color: "#2c3e50"
+                                elide: Text.ElideRight; Layout.fillWidth: true
+                            }
+                            Label {
+                                text: (model.contactPerson !== "" ? model.contactPerson + "  |  " : "")
+                                      + (model.phone !== "" ? model.phone : "-")
+                                      + (model.email !== "" ? "  |  " + model.email : "")
+                                font.pixelSize: 11; color: "#7f8c8d"
+                                elide: Text.ElideRight; Layout.fillWidth: true
+                            }
+                        }
+
+                        MouseArea {
+                            id: vendorPickerMouse
+                            anchors.fill: parent
+                            hoverEnabled: true
+                            cursorShape: Qt.PointingHandCursor
+                            onClicked: choosePoVendor(model.name)
+                        }
+                    }
+                }
+            }
         }
     }
 
@@ -2538,6 +3040,13 @@ ApplicationWindow {
                     statusLabel.text = "Refreshed from database"
                 }
                 ToolTip.visible: hovered; ToolTip.text: "Reload latest data from the shared database"
+                contentItem: Text { text: parent.text; color: "white"; horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter; font.pixelSize: 11 }
+            }
+
+            ToolButton {
+                text: "Company"
+                onClicked: companyProfileDialog.open()
+                ToolTip.visible: hovered; ToolTip.text: "Company details printed on purchase orders"
                 contentItem: Text { text: parent.text; color: "white"; horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter; font.pixelSize: 11 }
             }
 

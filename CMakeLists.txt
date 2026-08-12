@@ -28,7 +28,7 @@ find_package(Qt6 REQUIRED COMPONENTS
 qt_standard_project_setup()
 
 # ---- QXlsx ----
-if (EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/QXlsx/QXlsx/CMakeLists.txt")
+if (EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/QXlsx/QXlsx/CMakeLists.txt")  
     add_subdirectory(QXlsx/QXlsx)
     message(STATUS "QXlsx found and added")
 else()
@@ -51,6 +51,8 @@ qt_add_qml_module(EnsteinStockManager
         dbmanager.cpp
         serversetup.h
         serversetup.cpp
+        podocument.h
+        podocument.cpp
 )
 
 # Compile the window icon into the binary so it is present no matter how the
