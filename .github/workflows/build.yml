@@ -164,45 +164,37 @@ jobs:
             Write-Host ("Installer: {0} ({1:N1} MB)" -f $_.Name, ($_.Length/1MB))
           }
 
-      - name: Build single-file portable exe
+      - name: Build single-file portable exe (NSIS)
+        # The installer and ZIP are already built at this point, so a problem
+        # here costs the portable build only - it must not sink the release.
+        continue-on-error: true
         shell: pwsh
         env:
           APP_VERSION: ${{ steps.ver.outputs.version }}
         run: |
           $ErrorActionPreference = 'Stop'
-          # The official 7-Zip "extra" package provides 7zS2.sfx: a self-extracting
-          # stub that unpacks to a temp folder and launches RunProgram. The stub in
-          # a normal 7-Zip install cannot auto-run a program, hence the download.
-          $urls = @(
-            'https://www.7-zip.org/a/7z2409-extra.7z',
-            'https://www.7-zip.org/a/7z2408-extra.7z',
-            'https://www.7-zip.org/a/7z2301-extra.7z'
+          $candidates = @(
+            'C:\Program Files (x86)\NSIS\makensis.exe',
+            'C:\Program Files\NSIS\makensis.exe'
           )
-          $ok = $false
-          foreach ($u in $urls) {
-            try {
-              Invoke-WebRequest -Uri $u -OutFile 7z-extra.7z -UseBasicParsing
-              Write-Host "Downloaded $u"; $ok = $true; break
-            } catch { Write-Host "  ! $u unavailable" }
+          $makensis = $candidates | Where-Object { Test-Path $_ } | Select-Object -First 1
+          if (-not $makensis) {
+            Write-Host 'NSIS not preinstalled; installing via chocolatey'
+            choco install nsis -y --no-progress | Out-Null
+            $makensis = $candidates | Where-Object { Test-Path $_ } | Select-Object -First 1
           }
-          if (-not $ok) { throw '7-Zip extra package could not be downloaded' }
+          if (-not $makensis) { throw 'NSIS compiler (makensis.exe) not found' }
 
-          7z x 7z-extra.7z -o7zextra -y | Out-Null
-          $sfx = Get-ChildItem 7zextra -Recurse -Filter '7zS2.sfx' | Select-Object -First 1
-          if (-not $sfx) { throw '7zS2.sfx not found inside the 7-Zip extra package' }
-          Copy-Item $sfx.FullName .\7zS2.sfx -Force
-
-          # stub + config + archive concatenated byte-for-byte = one runnable exe.
-          7z a -t7z -mx=9 -ms=on app.7z .\dist\* | Out-Null
-          $out = "EnsteinStockManager-Portable-$env:APP_VERSION.exe"
-          $stream = [System.IO.File]::Create((Join-Path $PWD $out))
-          foreach ($part in @('7zS2.sfx', 'packaging\windows\sfx-config.txt', 'app.7z')) {
-            $bytes = [System.IO.File]::ReadAllBytes((Resolve-Path $part).Path)
-            $stream.Write($bytes, 0, $bytes.Length)
-          }
-          $stream.Close()
+          $out = Join-Path $PWD "EnsteinStockManager-Portable-$env:APP_VERSION.exe"
+          & $makensis `
+            "/DAPPVERSION=$env:APP_VERSION" `
+            "/DSTAGEDIR=$PWD\dist" `
+            "/DICONFILE=$PWD\assets\app-icon.ico" `
+            "/DOUTFILE=$out" `
+            packaging\windows\portable.nsi
+          if ($LASTEXITCODE -ne 0) { throw "makensis failed with exit code $LASTEXITCODE" }
           if (-not (Test-Path $out)) { throw 'portable exe was not produced' }
-          Write-Host ("Portable exe: {0} ({1:N1} MB)" -f $out, ((Get-Item $out).Length/1MB))
+          Write-Host ("Portable exe: {0:N1} MB" -f ((Get-Item $out).Length/1MB))
 
       - name: Create Windows ZIP
         shell: pwsh

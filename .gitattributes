@@ -1,9 +1,5 @@
 * text=auto
 
-# The 7-Zip SFX stub concatenates this file verbatim into the portable exe;
-# its parser expects Windows line endings.
-packaging/windows/sfx-config.txt text eol=crlf
-
 *.png binary
 *.ico binary
 *.xlsx binary

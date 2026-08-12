@@ -1,5 +1,0 @@
-;!@Install@!UTF-8!
-Title="Enstein Stock Manager"
-Progress="yes"
-RunProgram="EnsteinStockManager.exe"
-;!@InstallEnd@!
