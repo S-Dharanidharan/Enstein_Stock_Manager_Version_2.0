@@ -44,8 +44,11 @@ SolidCompression=yes
 WizardStyle=modern
 ; x64 only: the Qt runtime we ship is 64-bit, so refuse to install on a 32-bit
 ; Windows rather than failing at first launch with a cryptic DLL error.
-ArchitecturesAllowed=x64compatible
-ArchitecturesInstallIn64BitMode=x64compatible
+; "x64" rather than the newer "x64compatible": the old identifier is accepted by
+; every Inno Setup 6.x, so the build does not depend on the runner image having
+; a recent one.
+ArchitecturesAllowed=x64
+ArchitecturesInstallIn64BitMode=x64
 ; Install per-user when run without admin rights, per-machine with them.
 PrivilegesRequiredOverridesAllowed=dialog
 
