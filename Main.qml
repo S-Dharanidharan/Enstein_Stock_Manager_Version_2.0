@@ -17,6 +17,7 @@ ApplicationWindow {
     property int contextRow: -1
     property string fileType: "stock"
     property int tableRefreshToken: 0
+    property bool dbSetupBusy: false
     property var tableBaseWidths: [350, 190, 130, 200, 180, 200, 260, 190, 140]
     property var tableMinWidths: [140, 90, 70, 90, 90, 90, 110, 90, 80]
 
@@ -91,6 +92,31 @@ ApplicationWindow {
             refreshIssuePartDropdown()
             statusTimer.restart()
         }
+
+        onServerProvisionProgress: function(message) {
+            dbStatusLabel.text = message
+        }
+
+        onServerProvisionFinished: function(success, result) {
+            root.dbSetupBusy = false
+            if (success) {
+                // Show the admin exactly what to type into every other
+                // computer's connection dialog, and switch this machine's own
+                // form over to the freshly provisioned PostgreSQL server.
+                dbDriverCombo.currentIndex = 1
+                dbHostField.text = result.host !== undefined ? result.host : ""
+                dbPortField.text = (result.port !== undefined ? result.port : 5432).toString()
+                dbNameField.text = result.name !== undefined ? result.name : "stockmanager"
+                dbUserField.text = result.user !== undefined ? result.user : ""
+                dbPassField.text = result.password !== undefined ? result.password : ""
+                serverInfoBox.visible = true
+                dbStatusLabel.text = excelHandler.databaseStatus()
+                statusLabel.text = "This computer is now the shared database server"
+            } else {
+                dbStatusLabel.text = "Server setup failed: " +
+                    (result.message !== undefined ? result.message : "unknown error")
+            }
+        }
     }
 
     /* ================= COMMON DIALOGS ================= */
@@ -115,8 +141,6 @@ ApplicationWindow {
         standardButtons: Dialog.Ok | Dialog.Cancel
         anchors.centerIn: parent
         property bool isAuthenticated: false
-        property string correctUsername: "admin"
-        property string correctPassword: "admin123"
 
         ColumnLayout {
             spacing: 15
@@ -133,18 +157,20 @@ ApplicationWindow {
         }
 
         onAccepted: {
-            if (usernameField.text === correctUsername && passwordField.text === correctPassword) {
+            // Credentials are verified against the shared users table in the database.
+            var role = excelHandler.login(usernameField.text, passwordField.text)
+            if (role !== "") {
                 isAuthenticated = true
                 loginError.text = ""
                 usernameField.text = ""; passwordField.text = ""
-                statusLabel.text = "Login successful"; statusTimer.restart()
+                statusLabel.text = "Login successful (" + role + ")"; statusTimer.restart()
             } else {
                 isAuthenticated = false
                 loginError.text = "Invalid credentials"; passwordField.text = ""
                 loginDialog.open()
             }
         }
-
+        
         onOpened: loginError.text = ""
     }
 
@@ -184,17 +210,16 @@ ApplicationWindow {
         excelHandler.saveExcel(selectedFile)
     }
 
-    function setPermanentFile() {
-        var selectedFile = excelHandler.browseOpenFile("Set Permanent Stock File", "Excel files (*.xlsx *.xls)")
+    // Imports the user's stock xlsx into the shared database (login required).
+    function importStockFileAction() {
+        var selectedFile = excelHandler.browseOpenFile("Import Stock File", "Excel files (*.xlsx *.xls)")
         if (selectedFile === "") return
-        if (excelHandler.setPermanentFile(selectedFile)) {
-            if (excelHandler.loadPermanentFile()) {
-                rows = excelHandler.model.rowCount()
-                columns = excelHandler.model.columnCount()
-                root.fileType = excelHandler.getFileType()
-                statusLabel.text = "Permanent file set and loaded"
-                statusTimer.restart()
-            }
+        if (excelHandler.importStockFile(selectedFile)) {
+            rows = excelHandler.model.rowCount()
+            columns = excelHandler.model.columnCount()
+            root.fileType = excelHandler.getFileType()
+            statusLabel.text = "Stock file imported into the database"
+            statusTimer.restart()
         }
     }
 
@@ -674,8 +699,9 @@ ApplicationWindow {
         if (details !== undefined && details !== null) {
             poUnitPriceField.text = formatAmount(details.unitPrice)
             poDepartmentField.text = details.department || ""
-            if ((poVendorField.currentText || "").toString().trim() === "" &&
-                (details.vendor || "").toString().trim() !== "") {
+            // Auto-select the vendor that belongs to this item (from the
+            // Item Master); the user can still change it before adding.
+            if ((details.vendor || "").toString().trim() !== "") {
                 poVendorField.editText = details.vendor
             }
         } else {
@@ -938,6 +964,7 @@ ApplicationWindow {
     property var poPartDetailsLookup: ({})
     property var selectedPoPartDetails: ({})
     property var selectedPODetails: ({})
+    property var selectedPOItems: []
 
     function refreshPartNameDropdown(items) {
         var sourceItems = items
@@ -1027,21 +1054,63 @@ ApplicationWindow {
 
     /* ================= PURCHASE ORDER DIALOG ================= */
 
+    // Items being collected for the next purchase order (the "cart").
+    ListModel { id: poCartModel }
+    property double poCartTotal: 0
+
+    function recalcPoCartTotal() {
+        var t = 0
+        for (var i = 0; i < poCartModel.count; i++) t += poCartModel.get(i).lineTotal
+        poCartTotal = t
+    }
+
+    function clearPoLineFields() {
+        poPartNameField.currentIndex = -1
+        poPartNameField.editText = ""
+        poPartNoField.text = ""
+        poDepartmentField.text = ""
+        poVendorField.currentIndex = -1
+        poVendorField.editText = ""
+        poQtyField.value = 1
+        poUnitPriceField.text = "0.00"
+    }
+
+    function addPoItemToCart() {
+        var partName = (poPartNameField.editText || poPartNameField.currentText || "").toString().trim()
+        var vendor = (poVendorField.editText || poVendorField.currentText || "").toString().trim()
+        if (partName === "") { statusLabel.text = "Select a part first"; statusTimer.restart(); return }
+        if (vendor === "") { statusLabel.text = "Select a vendor for " + partName; statusTimer.restart(); return }
+
+        var qty = poQtyField.value
+        var price = parseAmount(poUnitPriceField.text)
+        poCartModel.append({
+            partName: partName,
+            partNo: poPartNoField.text,
+            vendor: vendor,
+            department: poDepartmentField.text,
+            qty: qty,
+            unitPrice: price,
+            lineTotal: qty * price
+        })
+        recalcPoCartTotal()
+        clearPoLineFields()
+    }
+
     Dialog {
         id: poDialog
         title: "Purchase Order Management"
         modal: true
         anchors.centerIn: parent
-        width: 750; height: 650
+        width: 780; height: 760
 
         ColumnLayout {
             anchors.fill: parent; spacing: 10
 
             Label { text: "Purchase Orders"; font.bold: true; font.pixelSize: 16; color: "#2c3e50" }
 
-            // Create PO Form
+            // Create PO Form - add one or more items to the cart, then create
             Rectangle {
-                Layout.fillWidth: true; Layout.preferredHeight: 200
+                Layout.fillWidth: true; Layout.preferredHeight: 170
                 color: "#f0f8ff"; border.color: "#3498db"; radius: 5
 
                 GridLayout {
@@ -1051,11 +1120,6 @@ ApplicationWindow {
                     Label { text: "Next PO:"; font.bold: true } Label { text: excelHandler.getNextPONumber(); color: "#3498db"; font.bold: true }
                     Label { text: "Date:" } Label { text: Qt.formatDate(new Date(), "yyyy-MM-dd") }
 
-                    Label { text: "Vendor*:" }
-                    ComboBox {
-                        id: poVendorField; Layout.fillWidth: true; editable: true
-                        model: excelHandler.getVendorNames()
-                    }
                     Label { text: "Part Name*:" }
                     RowLayout {
                         Layout.fillWidth: true
@@ -1077,11 +1141,16 @@ ApplicationWindow {
                             onClicked: showPoPartDetails(poPartNameField.currentText)
                         }
                     }
+                    Label { text: "Vendor*:" }
+                    ComboBox {
+                        id: poVendorField; Layout.fillWidth: true; editable: true
+                        model: excelHandler.getVendorNames()
+                    }
 
                     Label { text: "Part No:" } TextField { id: poPartNoField; Layout.fillWidth: true; placeholderText: "Part number" }
                     Label { text: "Department:" } TextField { id: poDepartmentField; Layout.fillWidth: true; readOnly: true; placeholderText: "Auto from Item Master" }
-                    Label { text: "Qty*:" } SpinBox { id: poQtyField; from: 1; to: 100000; value: 1; editable: true }
 
+                    Label { text: "Qty*:" } SpinBox { id: poQtyField; from: 1; to: 100000; value: 1; editable: true }
                     Label { text: "Unit Price:" }
                     TextField {
                         id: poUnitPriceField
@@ -1092,56 +1161,102 @@ ApplicationWindow {
                         inputMethodHints: Qt.ImhFormattedNumbersOnly
                         selectByMouse: true
                     }
-                    Label { text: "Expected:" }
-                    RowLayout {
-                        Layout.fillWidth: true
-                        TextField {
-                            id: poExpectedField
-                            Layout.fillWidth: true
-                            placeholderText: "YYYY-MM-DD"
-                            readOnly: true
-                            selectByMouse: true
-                        }
-                        Button {
-                            text: "Pick"
-                            onClicked: expectedDateDialog.open()
-                        }
-                    }
 
-                    Label { text: "Prepared By*:" }
-                    TextField {
-                        id: poPreparedByField
-                        Layout.fillWidth: true
-                        placeholderText: "Enter preparer name"
-                        text: excelHandler.currentUser
-                        selectByMouse: true
-                    }
-
-                    Label { text: "Total Price:"; font.bold: true }
+                    Label { text: "Line Total:"; font.bold: true }
                     Label {
                         text: formatRupees(poQtyField.value * parseAmount(poUnitPriceField.text))
                         color: "#27ae60"
                         font.bold: true
                     }
-
                     Item {}
                     Button {
-                        text: "Create PO"; highlighted: true
-                        onClicked: {
-                            var poNo = excelHandler.createPurchaseOrder(
-                                poVendorField.currentText, poPartNameField.currentText,
-                                poPartNoField.text, poQtyField.value,
-                                parseAmount(poUnitPriceField.text), poExpectedField.text,
-                                poDepartmentField.text, poPreparedByField.text)
-                            if (poNo !== "") {
-                                refreshPOList()
-                                poPartNameField.currentIndex = -1
-                                poPartNameField.editText = ""
-                                poPartNoField.text = ""
-                                poDepartmentField.text = ""
-                                poExpectedField.text = ""
-                                poQtyField.value = 1; poUnitPriceField.text = "0.00"
+                        text: "+ Add Item"
+                        highlighted: true
+                        onClicked: addPoItemToCart()
+                    }
+                }
+            }
+
+            // Cart: items that will go into this PO
+            Rectangle {
+                Layout.fillWidth: true; Layout.preferredHeight: 120
+                border.color: "#3498db"; radius: 5; color: "#fbfdff"
+
+                ListView {
+                    id: poCartView
+                    anchors.fill: parent; anchors.margins: 5; clip: true; spacing: 2
+                    model: poCartModel
+                    delegate: Rectangle {
+                        width: poCartView.width - 10; height: 26
+                        color: "#fff"; border.color: "#e0e0e0"; radius: 3
+                        RowLayout {
+                            anchors.fill: parent; anchors.margins: 4
+                            Label { text: (index + 1) + ". " + model.partName; font.bold: true; font.pixelSize: 11; Layout.preferredWidth: 200; elide: Text.ElideRight }
+                            Label { text: "Vendor: " + model.vendor; font.pixelSize: 11; color: "#7f8c8d"; Layout.preferredWidth: 160; elide: Text.ElideRight }
+                            Label { text: model.qty + " x " + formatRupees(model.unitPrice) + " = " + formatRupees(model.lineTotal); font.pixelSize: 11; color: "#27ae60"; Layout.fillWidth: true }
+                            Button {
+                                text: "X"
+                                Layout.preferredWidth: 26; Layout.preferredHeight: 20
+                                onClicked: { poCartModel.remove(index); recalcPoCartTotal() }
+                                contentItem: Text { text: "X"; color: "#e74c3c"; font.pixelSize: 10; font.bold: true; horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter }
                             }
+                        }
+                    }
+                }
+
+                Label {
+                    anchors.centerIn: parent
+                    text: "No items added - use \"+ Add Item\" above (a PO can hold several items)"
+                    visible: poCartModel.count === 0; color: "#95a5a6"; font.pixelSize: 11
+                }
+            }
+
+            // PO-level fields + create
+            RowLayout {
+                Layout.fillWidth: true; spacing: 8
+
+                Label { text: "Expected:" }
+                TextField {
+                    id: poExpectedField
+                    Layout.preferredWidth: 110
+                    placeholderText: "YYYY-MM-DD"
+                    readOnly: true
+                    selectByMouse: true
+                }
+                Button { text: "Pick"; onClicked: expectedDateDialog.open() }
+
+                Label { text: "Prepared By*:" }
+                TextField {
+                    id: poPreparedByField
+                    Layout.fillWidth: true
+                    placeholderText: "Enter preparer name"
+                    text: excelHandler.currentUser
+                    selectByMouse: true
+                }
+
+                Label { text: "Total: " + formatRupees(poCartTotal); font.bold: true; color: "#27ae60" }
+
+                Button {
+                    text: "Create PO (" + poCartModel.count + (poCartModel.count === 1 ? " item)" : " items)")
+                    highlighted: true
+                    enabled: poCartModel.count > 0
+                    onClicked: {
+                        var items = []
+                        for (var i = 0; i < poCartModel.count; i++) {
+                            var it = poCartModel.get(i)
+                            items.push({
+                                partName: it.partName, partNo: it.partNo,
+                                vendor: it.vendor, department: it.department,
+                                qty: it.qty, unitPrice: it.unitPrice
+                            })
+                        }
+                        var poNo = excelHandler.createPurchaseOrderItems(
+                            items, poExpectedField.text, poPreparedByField.text)
+                        if (poNo !== "") {
+                            poCartModel.clear()
+                            recalcPoCartTotal()
+                            poExpectedField.text = ""
+                            refreshPOList()
                         }
                     }
                 }
@@ -1228,13 +1343,15 @@ ApplicationWindow {
                                         receivedBy: model.receivedBy || "",
                                         receivedDate: model.receivedDate || ""
                                     }
+                                    selectedPOItems = excelHandler.getPOItems(model.poNo)
                                     poDetailsDialog.open()
                                 }
                                 contentItem: Text { text: "View"; color: "#2c3e50"; font.pixelSize: 11 }
                             }
                             Button {
                                 text: "Edit"
-                                visible: model.status !== "Received" && model.status !== "Closed"
+                                visible: model.status !== "Received" && model.status !== "Closed" &&
+                                         (model.itemCount === undefined || model.itemCount <= 1)
                                 onClicked: {
                                     editingPONumber = model.poNo
                                     editPoVendorField.text = model.vendor || ""
@@ -1264,12 +1381,7 @@ ApplicationWindow {
                                 visible: model.status === "Sent" || model.status === "Partially Received"
                                 onClicked: {
                                     grnPOFieldText = model.poNo
-                                    grnPartLabel.text = model.partName
-                                    grnOrderQty.text = model.qty.toString()
-                                    grnReceivedSoFar.text = model.receivedQty.toString()
-                                    grnRemainingQty = model.qty - model.receivedQty
-                                    grnReceivedField.value = grnRemainingQty
-                                    grnAcceptedField.value = grnRemainingQty
+                                    grnLoadItems(model.poNo)
                                     grnRejectedField.value = 0
                                     grnReceivedByField.text = excelHandler.currentUser
                                     grnDialog.open()
@@ -1417,11 +1529,24 @@ ApplicationWindow {
             spacing: 8
 
             Label { text: "PO No: " + (selectedPODetails.poNo || "-"); font.bold: true; color: "#2c3e50" }
-            Label { text: "Part: " + (selectedPODetails.partName || "-") + " (" + (selectedPODetails.partNo || "-") + ")" }
-            Label { text: "Department: " + (selectedPODetails.department || "-") }
-            Label { text: "Vendor: " + (selectedPODetails.vendor || "-") }
-            Label { text: "Qty: " + (selectedPODetails.qty || 0) }
-            Label { text: "Unit Price: " + formatRupees(selectedPODetails.unitPrice || 0) }
+
+            // Line items of this PO (each with its own vendor)
+            Label { text: "Items (" + selectedPOItems.length + "):"; font.bold: true }
+            Repeater {
+                model: selectedPOItems
+                Label {
+                    text: "  " + (index + 1) + ". " + (modelData.partName || "-") +
+                          " (" + (modelData.partNo || "-") + ")  x" + (modelData.qty || 0) +
+                          " @ " + formatRupees(modelData.unitPrice || 0) +
+                          "  | Vendor: " + (modelData.vendor || "-") +
+                          "  | Recv: " + (modelData.receivedQty || 0) + "/" + (modelData.qty || 0)
+                    font.pixelSize: 12
+                }
+            }
+
+            Label { text: "Department: " + (selectedPODetails.department || "-"); visible: selectedPOItems.length <= 1 }
+            Label { text: "Vendor(s): " + (selectedPODetails.vendor || "-") }
+            Label { text: "Total Qty: " + (selectedPODetails.qty || 0) }
             Label { text: "Total Price: " + formatRupees(selectedPODetails.totalAmount || 0); font.bold: true; color: "#27ae60" }
             Label { text: "Expected Date: " + (selectedPODetails.expectedDate || "-") }
             Label { text: "Status: " + (selectedPODetails.status || "-") }
@@ -1574,13 +1699,49 @@ ApplicationWindow {
 
     property int grnRemainingQty: 0
 
+    // Line items of the PO being received.
+    ListModel { id: grnItemsModel }
+
+    function grnLoadItems(poNo) {
+        grnItemsModel.clear()
+        var lines = excelHandler.getPOItems(poNo)
+        var firstOpen = -1
+        for (var i = 0; i < lines.length; i++) {
+            var l = lines[i]
+            grnItemsModel.append({
+                itemId: l.id,
+                label: l.partName + "  (" + l.receivedQty + "/" + l.qty + " received)",
+                qty: l.qty,
+                receivedQty: l.receivedQty
+            })
+            if (firstOpen === -1 && l.receivedQty < l.qty) firstOpen = i
+        }
+        grnItemCombo.currentIndex = firstOpen >= 0 ? firstOpen : 0
+        grnApplySelection(grnItemCombo.currentIndex)
+    }
+
+    function grnApplySelection(index) {
+        if (index < 0 || index >= grnItemsModel.count) {
+            grnOrderQty.text = ""; grnReceivedSoFar.text = ""; grnRemainingQty = 0
+            grnReceivedField.value = 0; grnAcceptedField.value = 0
+            return
+        }
+        var line = grnItemsModel.get(index)
+        grnOrderQty.text = line.qty.toString()
+        grnReceivedSoFar.text = line.receivedQty.toString()
+        grnRemainingQty = Math.max(0, line.qty - line.receivedQty)
+        grnReceivedField.value = grnRemainingQty
+        grnAcceptedField.value = grnRemainingQty
+        grnRejectedField.value = 0
+    }
+
     Dialog {
         id: grnDialog
         title: "Receive Goods (GRN)"
         modal: true
         standardButtons: Dialog.Ok | Dialog.Cancel
         anchors.centerIn: parent
-        width: 450
+        width: 470
 
         ColumnLayout {
             spacing: 10; width: parent.width
@@ -1592,7 +1753,14 @@ ApplicationWindow {
                 columns: 2; rowSpacing: 8; columnSpacing: 10; Layout.fillWidth: true
 
                 Label { text: "PO No:"; font.bold: true } Label { id: grnPOLabel; text: grnPOFieldText; font.bold: true; color: "#3498db" }
-                Label { text: "Part:"; font.bold: true } Label { id: grnPartLabel; text: "" }
+                Label { text: "Item*:"; font.bold: true }
+                ComboBox {
+                    id: grnItemCombo
+                    Layout.fillWidth: true
+                    model: grnItemsModel
+                    textRole: "label"
+                    onActivated: function(index) { grnApplySelection(index) }
+                }
                 Label { text: "Order Qty:" } Label { id: grnOrderQty; text: "" }
                 Label { text: "Already Received:" } Label { id: grnReceivedSoFar; text: "" }
                 Label { text: "Remaining:" ; font.bold: true } Label { text: grnRemainingQty.toString(); font.bold: true; color: "#e67e22" }
@@ -1622,8 +1790,10 @@ ApplicationWindow {
         }
 
         onAccepted: {
-            var grnNo = excelHandler.receiveGoods(
-                grnPOFieldText, grnReceivedField.value,
+            if (grnItemCombo.currentIndex < 0 || grnItemsModel.count === 0) return
+            var itemId = grnItemsModel.get(grnItemCombo.currentIndex).itemId
+            var grnNo = excelHandler.receiveGoodsForItem(
+                itemId, grnReceivedField.value,
                 grnAcceptedField.value, grnRejectedField.value,
                 grnRemarksField.text, grnReceivedByField.text)
             if (grnNo !== "") {
@@ -1638,13 +1808,33 @@ ApplicationWindow {
 
     /* ================= ISSUE STOCK DIALOG ================= */
 
+    // Parts collected for the next material issue (the "cart").
+    ListModel { id: issueCartModel }
+
+    function addIssueItemToCart() {
+        var partName = (issuePartField.editText || issuePartField.currentText || "").toString().trim()
+        if (partName === "") { statusLabel.text = "Select a part first"; statusTimer.restart(); return }
+        // Merge duplicate parts into one line.
+        for (var i = 0; i < issueCartModel.count; i++) {
+            if (issueCartModel.get(i).partName === partName) {
+                issueCartModel.setProperty(i, "qty", issueCartModel.get(i).qty + issueQtyField.value)
+                issuePartField.currentIndex = -1; issuePartField.editText = ""; issueQtyField.value = 1
+                return
+            }
+        }
+        issueCartModel.append({ partName: partName, qty: issueQtyField.value })
+        issuePartField.currentIndex = -1
+        issuePartField.editText = ""
+        issueQtyField.value = 1
+    }
+
     Dialog {
         id: issueDialog
         title: "Issue Stock to Department"
         modal: true
         standardButtons: Dialog.Ok | Dialog.Cancel
         anchors.centerIn: parent
-        width: 450
+        width: 470
 
         ColumnLayout {
             spacing: 10; width: parent.width
@@ -1662,7 +1852,7 @@ ApplicationWindow {
             }
 
             Rectangle {
-                Layout.fillWidth: true; height: 120
+                Layout.fillWidth: true; height: 100
                 border.color: "#dee2e6"; radius: 4; color: "#f8f9fa"
 
                 ListView {
@@ -1693,17 +1883,64 @@ ApplicationWindow {
                 }
             }
 
-            Label { text: "Part Name*:" }
-            ComboBox {
-                id: issuePartField
-                Layout.fillWidth: true
-                editable: true
-                model: issueSearchModel
-                textRole: "name"
+            RowLayout {
+                Layout.fillWidth: true; spacing: 8
+                ColumnLayout {
+                    Layout.fillWidth: true; spacing: 2
+                    Label { text: "Part Name*:" }
+                    ComboBox {
+                        id: issuePartField
+                        Layout.fillWidth: true
+                        editable: true
+                        model: issueSearchModel
+                        textRole: "name"
+                    }
+                }
+                ColumnLayout {
+                    spacing: 2
+                    Label { text: "Quantity*:" }
+                    SpinBox { id: issueQtyField; from: 1; to: 100000; value: 1; editable: true }
+                }
+                ColumnLayout {
+                    spacing: 2
+                    Label { text: " " }
+                    Button { text: "+ Add"; highlighted: true; onClicked: addIssueItemToCart() }
+                }
             }
 
-            Label { text: "Quantity*:" }
-            SpinBox { id: issueQtyField; from: 1; to: 100000; value: 1; editable: true; Layout.fillWidth: true }
+            // Cart: parts that will be issued together under one issue number
+            Rectangle {
+                Layout.fillWidth: true; height: 96
+                border.color: "#e67e22"; radius: 4; color: "#fffaf5"
+
+                ListView {
+                    id: issueCartView
+                    anchors.fill: parent; anchors.margins: 4; clip: true; spacing: 2
+                    model: issueCartModel
+                    delegate: Rectangle {
+                        width: issueCartView.width - 8; height: 24
+                        color: "#fff"; border.color: "#e0e0e0"; radius: 3
+                        RowLayout {
+                            anchors.fill: parent; anchors.margins: 4
+                            Label { text: (index + 1) + ". " + model.partName; font.pixelSize: 11; font.bold: true; Layout.fillWidth: true; elide: Text.ElideRight }
+                            Label { text: "Qty: " + model.qty; font.pixelSize: 11; color: "#e67e22" }
+                            Button {
+                                text: "X"
+                                Layout.preferredWidth: 24; Layout.preferredHeight: 18
+                                onClicked: issueCartModel.remove(index)
+                                contentItem: Text { text: "X"; color: "#e74c3c"; font.pixelSize: 9; font.bold: true; horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter }
+                            }
+                        }
+                    }
+                }
+
+                Label {
+                    anchors.centerIn: parent
+                    text: "No parts added - use \"+ Add\" (several parts can go in one issue)"
+                    visible: issueCartModel.count === 0
+                    color: "#95a5a6"; font.pixelSize: 11
+                }
+            }
 
             Label { text: "Issue To Department*:" }
             ComboBox { id: issueDeptField; Layout.fillWidth: true; editable: true; model: ["Electronics", "Mechanical", "Hardware", "Software", "Production", "R&D", "Other"] }
@@ -1713,15 +1950,29 @@ ApplicationWindow {
 
             Rectangle { Layout.fillWidth: true; height: 1; color: "#ccc" }
 
-            Label { text: "Stock will be deducted automatically"; font.pixelSize: 10; color: "#e67e22"; wrapMode: Text.WordWrap }
+            Label { text: "Stock will be deducted automatically for every part in the list"; font.pixelSize: 10; color: "#e67e22"; wrapMode: Text.WordWrap }
         }
 
         onAccepted: {
-            var issuePartName = (issuePartField.editText || issuePartField.currentText || "").toString().trim()
-            var issueNo = excelHandler.issueStock(
-                issuePartName, issueQtyField.value,
-                issueDeptField.currentText, issueByField.text)
+            // Anything still sitting in the entry fields counts as one more line.
+            var pendingPart = (issuePartField.editText || issuePartField.currentText || "").toString().trim()
+            if (pendingPart !== "") addIssueItemToCart()
+
+            if (issueCartModel.count === 0) {
+                statusLabel.text = "Add at least one part to issue"
+                statusTimer.restart()
+                return
+            }
+
+            var items = []
+            for (var i = 0; i < issueCartModel.count; i++) {
+                var it = issueCartModel.get(i)
+                items.push({ partName: it.partName, qty: it.qty })
+            }
+            var issueNo = excelHandler.issueMultipleStock(
+                items, issueDeptField.currentText, issueByField.text)
             if (issueNo !== "") {
+                issueCartModel.clear()
                 issuePartField.currentIndex = -1
                 issuePartField.editText = ""
                 issueQtyField.value = 1
@@ -1732,6 +1983,7 @@ ApplicationWindow {
 
         onOpened: {
             issueSearchField.text = ""
+            issueCartModel.clear()
             refreshIssuePartDropdown("")
             issueByField.text = excelHandler.currentUser
         }
@@ -1860,7 +2112,6 @@ ApplicationWindow {
                     }
                 }
                 Item { Layout.fillWidth: true }
-                Button { text: "Close"; onClicked: reportsDialog.close() }
             }
         }
     }
@@ -1899,13 +2150,13 @@ ApplicationWindow {
                             anchors.fill: parent; anchors.margins: 8
                             ColumnLayout {
                                 Layout.fillWidth: true; spacing: 2
-                                Label { text: model.partName; font.bold: true; font.pixelSize: 13 }
+                                Label { text: model.partName + (model.partNo ? "  (" + model.partNo + ")" : ""); font.bold: true; font.pixelSize: 13 }
                                 Label {
-                                    text: "Stock: " + model.stock + " | Min: " + model.minStock + " | Reorder at: " + model.reorderLevel + " | Deficit: " + model.deficit
+                                    text: "Stock: " + model.stock + " | Required: " + model.requiredQty + " | On order: " + model.onOrder + " | Shortage: " + model.shortage
                                     font.pixelSize: 11; color: "#e74c3c"
                                 }
                             }
-                            Label { text: model.vendor; font.pixelSize: 11; color: "#7f8c8d" }
+                            Label { text: model.vendor ? "Vendor: " + model.vendor : "No vendor set!"; font.pixelSize: 11; color: model.vendor ? "#7f8c8d" : "#e74c3c" }
                         }
                     }
                 }
@@ -1916,13 +2167,15 @@ ApplicationWindow {
             RowLayout {
                 Layout.fillWidth: true
                 Button {
-                    text: "Auto-Generate POs for Low Stock"
+                    text: "Auto-Generate PO for Low Stock"
                     highlighted: true
                     enabled: lowStockModel.count > 0
                     onClicked: {
                         if (excelHandler.autoGeneratePOForLowStock()) {
-                            statusLabel.text = "POs generated for low stock items"
+                            statusLabel.text = "Draft PO generated for low stock items"
                             statusTimer.restart()
+                            refreshLowStock()
+                            refreshPOList()
                         }
                     }
                 }
@@ -1989,62 +2242,130 @@ ApplicationWindow {
         }
     }
 
-    /* ================= CLOUD SETTINGS DIALOG ================= */
+    /* ================= DATABASE CONNECTION DIALOG ================= */
 
     Dialog {
         id: cloudSettingsDialog
-        title: "Cloud Sync Settings"
+        title: "Database Connection"
         modal: true
-        width: 500
+        width: 540
+        anchors.centerIn: parent
+
+        onOpened: {
+            var cfg = excelHandler.getDatabaseSettings()
+            dbDriverCombo.currentIndex = (cfg.driver === "QPSQL") ? 1 : 0
+            dbHostField.text = cfg.host !== undefined ? cfg.host : ""
+            dbPortField.text = (cfg.port !== undefined ? cfg.port : 5432).toString()
+            dbNameField.text = cfg.name !== undefined ? cfg.name : "stockmanager"
+            dbUserField.text = cfg.user !== undefined ? cfg.user : ""
+            dbPassField.text = cfg.password !== undefined ? cfg.password : ""
+            dbStatusLabel.text = excelHandler.databaseStatus()
+            serverInfoBox.visible = false
+            root.dbSetupBusy = false
+        }
 
         ColumnLayout {
-            spacing: 20; width: parent.width
+            spacing: 16; width: parent.width
 
-            Label { text: "Cloud Folder Path:"; font.bold: true }
-            RowLayout {
-                Layout.fillWidth: true
-                TextField { id: cloudFolderField; text: excelHandler.cloudFolder; Layout.fillWidth: true }
-                Button {
-                    text: "Browse"
-                    onClicked: {
-                        var folder = excelHandler.browseFolder("Select Cloud Sync Folder")
-                        if (folder !== "") cloudFolderField.text = folder
+            Label {
+                text: "All data is stored in one shared database so everyone works on the same\nnumbers. Pick ONE computer to be the server; every other computer connects to it."
+                color: "#7f8c8d"; font.pixelSize: 12; Layout.fillWidth: true; wrapMode: Text.WordWrap
+            }
+
+            /* -------- Option 1: make THIS computer the server -------- */
+            Rectangle {
+                Layout.fillWidth: true; radius: 6
+                color: "#f4f9ff"; border.color: "#3498db"; border.width: 1
+                implicitHeight: serverSetupCol.implicitHeight + 24
+                ColumnLayout {
+                    id: serverSetupCol
+                    anchors.fill: parent; anchors.margins: 12; spacing: 8
+                    Label { text: "① Make this computer the server"; font.bold: true; color: "#2c3e50" }
+                    Label {
+                        text: "Installs and configures the shared database on THIS computer. Do this on\njust one machine (the one that stays on). You'll be asked for your system password."
+                        color: "#7f8c8d"; font.pixelSize: 11; Layout.fillWidth: true; wrapMode: Text.WordWrap
+                    }
+                    RowLayout {
+                        spacing: 10; Layout.fillWidth: true
+                        Button {
+                            text: root.dbSetupBusy ? "Setting up..." : "Set up this computer as the server"
+                            enabled: !root.dbSetupBusy
+                            onClicked: {
+                                root.dbSetupBusy = true
+                                serverInfoBox.visible = false
+                                dbStatusLabel.text = "Starting server setup..."
+                                excelHandler.setupThisComputerAsServer()
+                            }
+                        }
+                        BusyIndicator { running: root.dbSetupBusy; visible: root.dbSetupBusy; implicitWidth: 28; implicitHeight: 28 }
+                    }
+                    Rectangle {
+                        id: serverInfoBox
+                        visible: false
+                        Layout.fillWidth: true; radius: 4
+                        color: "#eafaf1"; border.color: "#27ae60"; border.width: 1
+                        implicitHeight: serverInfoCol.implicitHeight + 20
+                        ColumnLayout {
+                            id: serverInfoCol
+                            anchors.fill: parent; anchors.margins: 10; spacing: 3
+                            Label { text: "✓ This computer is now the server. On every OTHER computer, open this"; font.pixelSize: 11; font.bold: true; color: "#1e8449"; Layout.fillWidth: true; wrapMode: Text.WordWrap }
+                            Label { text: "same dialog, choose PostgreSQL, and enter:"; font.pixelSize: 11; font.bold: true; color: "#1e8449"; Layout.fillWidth: true; wrapMode: Text.WordWrap }
+                            Label { text: "   Host: " + dbHostField.text + "   Port: " + dbPortField.text; font.pixelSize: 11; font.family: "monospace"; color: "#145a32" }
+                            Label { text: "   Database: " + dbNameField.text + "   User: " + dbUserField.text; font.pixelSize: 11; font.family: "monospace"; color: "#145a32" }
+                            Label { text: "   Password: " + dbPassField.text; font.pixelSize: 11; font.family: "monospace"; color: "#145a32" }
+                            Label { text: "Write these down — the password is shown only here."; font.pixelSize: 10; font.italic: true; color: "#7f8c8d"; Layout.topMargin: 4 }
+                        }
                     }
                 }
             }
 
-            Label { text: "User Information:"; font.bold: true }
+            /* -------- Option 2: connect to an existing server -------- */
+            Label { text: "② Or connect to a server / choose storage"; font.bold: true; color: "#2c3e50" }
+            ComboBox {
+                id: dbDriverCombo; Layout.fillWidth: true
+                model: ["SQLite (local file — this computer only)", "PostgreSQL (connect to shared server)"]
+            }
+
             GridLayout {
-                columns: 2; rowSpacing: 10; columnSpacing: 10; Layout.fillWidth: true
-                Label { text: "Name:" } TextField { id: userNameField; text: excelHandler.currentUser; Layout.fillWidth: true }
-                Label { text: "Role:" }
-                ComboBox {
-                    id: userRoleCombo; model: ["owner", "editor", "viewer"]; Layout.fillWidth: true
-                    Component.onCompleted: {
-                        if (excelHandler.userRole === "owner") currentIndex = 0
-                        else if (excelHandler.userRole === "editor") currentIndex = 1
-                        else currentIndex = 2
-                    }
-                }
+                columns: 2; rowSpacing: 8; columnSpacing: 10; Layout.fillWidth: true
+                enabled: dbDriverCombo.currentIndex === 1
+                Label { text: "Host:" }     TextField { id: dbHostField; Layout.fillWidth: true; placeholderText: "192.168.1.10 (the server computer)" }
+                Label { text: "Port:" }     TextField { id: dbPortField; Layout.fillWidth: true; placeholderText: "5432"; inputMethodHints: Qt.ImhDigitsOnly }
+                Label { text: "Database:" } TextField { id: dbNameField; Layout.fillWidth: true; placeholderText: "stockmanager" }
+                Label { text: "User:" }     TextField { id: dbUserField; Layout.fillWidth: true }
+                Label { text: "Password:" } TextField { id: dbPassField; Layout.fillWidth: true; echoMode: TextInput.Password }
             }
 
-            CheckBox {
-                id: autoSyncCheck
-                text: "Enable Auto Sync (Upload/Download)"
-                checked: excelHandler.syncEnabled
-            }
+            Label { id: dbStatusLabel; text: ""; color: "#2c3e50"; Layout.fillWidth: true; wrapMode: Text.WordWrap }
 
             RowLayout {
                 Layout.alignment: Qt.AlignRight
-                Button { text: "Cancel"; onClicked: cloudSettingsDialog.close() }
+                Button { text: "Close"; enabled: !root.dbSetupBusy; onClicked: cloudSettingsDialog.close() }
                 Button {
-                    text: "Save"; highlighted: true
+                    text: "Connect & Save"; highlighted: true; enabled: !root.dbSetupBusy
                     onClicked: {
-                        excelHandler.setCloudFolder(cloudFolderField.text)
-                        excelHandler.setCurrentUser(userNameField.text)
-                        excelHandler.setUserRole(userRoleCombo.currentText)
-                        excelHandler.setSyncEnabled(autoSyncCheck.checked)
-                        statusLabel.text = "Settings saved"; cloudSettingsDialog.close()
+                        var wantServer = dbDriverCombo.currentIndex === 1
+                        var driver = wantServer ? "QPSQL" : "QSQLITE"
+                        excelHandler.configureDatabase(
+                            driver, dbHostField.text, parseInt(dbPortField.text) || 5432,
+                            dbNameField.text, dbUserField.text, dbPassField.text)
+
+                        // configureDatabase() reports success even when it
+                        // silently fell back to a local SQLite file. If the
+                        // user asked for the shared server but we did NOT end
+                        // up on a server backend, that's a real failure the
+                        // user must see — otherwise their edits won't be shared.
+                        if (wantServer && !excelHandler.isDatabaseServerBackend()) {
+                            dbStatusLabel.text =
+                                "Could NOT connect to PostgreSQL — using a LOCAL file, so data will NOT be shared.\n"
+                                + "Reason: " + excelHandler.databaseLastError()
+                            statusLabel.text = "PostgreSQL connection failed (using local file)"
+                        } else {
+                            dbStatusLabel.text = excelHandler.databaseStatus()
+                            statusLabel.text = wantServer ? "Connected to shared database"
+                                                          : "Using local database (this computer only)"
+                            cloudSettingsDialog.close()
+                        }
                     }
                 }
             }
@@ -2074,9 +2395,10 @@ ApplicationWindow {
             }
 
             ToolButton {
-                text: "Set Permanent"
+                text: "Import Stock"
                 enabled: loginDialog.isAuthenticated
-                onClicked: setPermanentFile()
+                onClicked: importStockFileAction()
+                ToolTip.visible: hovered; ToolTip.text: "Import a stock xlsx into the shared database (login required)"
                 contentItem: Text { text: parent.text; color: parent.enabled ? "#f39c12" : "#7f8c8d"; horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter; font.bold: true; font.pixelSize: 11 }
             }
 
@@ -2206,26 +2528,23 @@ ApplicationWindow {
 
             Label { text: excelHandler.currentUser; color: "white"; font.pixelSize: 11 }
 
-            // CLOUD SYNC
+            // DATABASE
             ToolButton {
-                text: "Up"
-                enabled: excelHandler.canEdit()
-                onClicked: { if (excelHandler.syncToCloud()) statusLabel.text = "Synced to cloud" }
-                ToolTip.visible: hovered; ToolTip.text: "Upload to Cloud"
-                contentItem: Text { text: parent.text; color: parent.enabled ? "white" : "#7f8c8d"; horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter; font.pixelSize: 11 }
-            }
-
-            ToolButton {
-                text: "Down"
-                onClicked: { if (excelHandler.syncFromCloud()) { statusLabel.text = "Downloaded from cloud"; rows = excelHandler.model.rowCount() } }
-                ToolTip.visible: hovered; ToolTip.text: "Download from Cloud"
+                text: "Refresh"
+                onClicked: {
+                    excelHandler.refreshFromDatabase()
+                    rows = excelHandler.model.rowCount()
+                    columns = excelHandler.model.columnCount()
+                    statusLabel.text = "Refreshed from database"
+                }
+                ToolTip.visible: hovered; ToolTip.text: "Reload latest data from the shared database"
                 contentItem: Text { text: parent.text; color: "white"; horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter; font.pixelSize: 11 }
             }
 
             ToolButton {
-                text: "Settings"
+                text: "Database"
                 onClicked: cloudSettingsDialog.open()
-                ToolTip.visible: hovered; ToolTip.text: "Cloud Settings"
+                ToolTip.visible: hovered; ToolTip.text: "Database Connection Settings"
                 contentItem: Text { text: parent.text; color: "white"; horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter; font.pixelSize: 11 }
             }
         }
@@ -2235,24 +2554,6 @@ ApplicationWindow {
 
     ColumnLayout {
         anchors.fill: parent; spacing: 0
-
-        // Warning banner
-        Rectangle {
-            Layout.fillWidth: true; Layout.preferredHeight: 40
-            color: "#fff3cd"; border.color: "#ffc107"; border.width: 2
-            visible: excelHandler.permanentFile === ""
-
-            RowLayout {
-                anchors.fill: parent; anchors.margins: 8; spacing: 10
-                Label { text: "No permanent stock file set. Click 'Set Permanent' to select your main stock database file."; font.pixelSize: 13; color: "#856404"; Layout.fillWidth: true }
-                Button {
-                    text: "Set Now"; highlighted: true; enabled: loginDialog.isAuthenticated
-                    onClicked: setPermanentFile()
-                    background: Rectangle { color: parent.enabled ? "#ffc107" : "#ccc"; radius: 4 }
-                    contentItem: Text { text: parent.text; color: "#856404"; font.bold: true; horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter }
-                }
-            }
-        }
 
         // Low stock warning
         Rectangle {
@@ -2432,42 +2733,13 @@ ApplicationWindow {
         console.log("========================================")
         console.log("Enstein Stock Manager + Supply Chain Init")
 
-        var hasPermanent = excelHandler.hasSavedPermanentFile()
-        var autoSynced = false
-
-        if (hasPermanent && excelHandler.syncEnabled && excelHandler.cloudFolder !== "") {
-            autoSynced = excelHandler.syncFromCloud()
-            if (autoSynced) {
-                rows = excelHandler.model.rowCount()
-                columns = excelHandler.model.columnCount()
-                root.fileType = excelHandler.getFileType()
-                statusLabel.text = "Loaded from cloud"
-            }
-        }
-
-        if (!autoSynced) {
-            if (hasPermanent) {
-                var loaded = excelHandler.loadPermanentFile()
-                if (loaded) {
-                    rows = excelHandler.model.rowCount()
-                    columns = excelHandler.model.columnCount()
-                    root.fileType = excelHandler.getFileType()
-                    statusLabel.text = "Loaded: " + excelHandler.getFileName()
-                } else {
-                    excelHandler.createNew(15, 9)
-                    rows = excelHandler.model.rowCount()
-                    columns = excelHandler.model.columnCount()
-                    root.fileType = "stock"
-                    statusLabel.text = "Could not load saved file - Created new"
-                }
-            } else {
-                excelHandler.createNew(15, 9)
-                rows = excelHandler.model.rowCount()
-                columns = excelHandler.model.columnCount()
-                root.fileType = "stock"
-                statusLabel.text = "Ready - Please set permanent file"
-            }
-        }
+        // Stock is loaded from the shared database by the backend at startup.
+        rows = excelHandler.model.rowCount()
+        columns = excelHandler.model.columnCount()
+        root.fileType = "stock"
+        statusLabel.text = excelHandler.isDatabaseConnected()
+                ? "Ready - stock loaded from database"
+                : "Warning: database not connected"
 
         statusTimer.restart()
         console.log("System initialized")

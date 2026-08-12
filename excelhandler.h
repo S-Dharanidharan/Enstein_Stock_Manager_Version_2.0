@@ -19,6 +19,9 @@
 #include <xlsxdocument.h>
 #include <xlsxworksheet.h>
 
+class DatabaseManager;
+class ServerSetup;
+
 // ==================== ExcelTableModel ====================
 class ExcelTableModel : public QAbstractTableModel
 {
@@ -94,6 +97,10 @@ public:
     Q_INVOKABLE QString getSavedPermanentPath();
     Q_INVOKABLE bool hasSavedPermanentFile();
 
+    // Imports a stock xlsx into the shared database (replaces the old
+    // "permanent file" concept: the database is the permanent store now).
+    Q_INVOKABLE bool importStockFile(const QString &filePath);
+
     Q_INVOKABLE bool appendFromFile(const QString &filePath);
     Q_INVOKABLE bool appendStockFile(const QString &filePath);
     Q_INVOKABLE bool validateFileStructure(const QString &filePath);
@@ -116,7 +123,34 @@ public:
                                 double unitPrice);
     Q_INVOKABLE int getNextSerialNumber() const;
 
-    // ---- Cloud Sync ----
+    // ---- Authentication (backed by the shared users table) ----
+    Q_INVOKABLE QString login(const QString &username, const QString &password);
+
+    // ---- Database connection settings ----
+    Q_INVOKABLE QVariantMap getDatabaseSettings() const;
+    Q_INVOKABLE bool configureDatabase(const QString &driver,
+                                       const QString &host, int port,
+                                       const QString &name,
+                                       const QString &user, const QString &password);
+    Q_INVOKABLE QString databaseStatus() const;
+    Q_INVOKABLE bool isDatabaseConnected() const;
+    // True only when actually connected to a shared server (PostgreSQL), not
+    // the local SQLite fallback. Lets the UI detect a silent fallback.
+    Q_INVOKABLE bool isDatabaseServerBackend() const;
+    // Human-readable reason the last connection attempt failed (empty if none).
+    Q_INVOKABLE QString databaseLastError() const;
+    // Reloads all supply-chain caches from the database (pull latest in multi-user).
+    Q_INVOKABLE void refreshFromDatabase();
+
+    // ---- LAN server provisioning ----
+    // Turns this computer into the shared PostgreSQL server for every other
+    // installation of the app. Runs asynchronously; connect to
+    // serverProvisionProgress()/serverProvisionFinished() for status.
+    Q_INVOKABLE void setupThisComputerAsServer();
+    Q_INVOKABLE bool isServerProvisioned() const;
+    Q_INVOKABLE QString serverLanAddressHint() const;
+
+    // ---- Cloud Sync (deprecated: storage now lives in the shared database) ----
     Q_INVOKABLE bool syncToCloud();
     Q_INVOKABLE bool syncFromCloud();
     Q_INVOKABLE bool checkForUpdates();
@@ -154,6 +188,14 @@ public:
     //Q_INVOKABLE bool updateItemMasterDetails(const QString &partNo, QVariantMap itemDetails);
 
     // ---- Purchase Order Management ----
+    // One PO holding several line items; each item carries its own vendor.
+    // items: list of maps {partName, partNo, vendor, department, qty, unitPrice}
+    Q_INVOKABLE QString createPurchaseOrderItems(const QVariantList &items,
+                                                 const QString &expectedDate,
+                                                 const QString &preparedBy = "");
+    Q_INVOKABLE QVariantList getPOItems(const QString &poNo);
+
+    // Legacy single-item entry point (delegates to createPurchaseOrderItems).
     Q_INVOKABLE QString createPurchaseOrder(const QString &vendor,
                                             const QString &partName,
                                             const QString &partNo,
@@ -170,6 +212,12 @@ public:
     int pendingPOCount() const;
 
     // ---- Goods Receipt Note (GRN) ----
+    // Receive against a specific PO line item (multi-item POs).
+    Q_INVOKABLE QString receiveGoodsForItem(int itemId,
+                                            int receivedQty, int acceptedQty,
+                                            int rejectedQty, const QString &remarks,
+                                            const QString &receivedBy = "");
+    // Legacy whole-PO entry point (delegates to the first open line).
     Q_INVOKABLE QString receiveGoods(const QString &poNo,
                                      int receivedQty, int acceptedQty,
                                      int rejectedQty, const QString &remarks,
@@ -184,6 +232,11 @@ public:
     Q_INVOKABLE QVariantList getAllMovements();
 
     // ---- Material Issue ----
+    // Issue several parts to one department under a single issue number.
+    // items: list of maps {partName, qty}
+    Q_INVOKABLE QString issueMultipleStock(const QVariantList &items,
+                                           const QString &department,
+                                           const QString &issuedBy);
     Q_INVOKABLE QString issueStock(const QString &partName, int qty,
                                    const QString &department, const QString &issuedBy);
     Q_INVOKABLE QVariantList getIssueNotes();
@@ -213,6 +266,10 @@ signals:
     void syncCompleted(bool success);
     void conflictDetected(const QString &message);
 
+    // LAN server provisioning
+    void serverProvisionProgress(const QString &message);
+    void serverProvisionFinished(bool success, const QVariantMap &result);
+
     // Supply Chain signals
     void lowStockCountChanged();
     void pendingPOCountChanged();
@@ -224,11 +281,13 @@ signals:
     void movementLogged(const QString &partName, const QString &type, int qty);
 
 private slots:
-    void onModelDataChanged();
+    void onModelDataChanged();                           
     void autoSavePermanent();
     void autoSyncFromCloud();
 
 private:
+    DatabaseManager *m_db;
+    ServerSetup *m_serverSetup;
     ExcelTableModel *m_model;
     QString m_currentFile;
     QString m_permanentFile;
@@ -243,10 +302,11 @@ private:
     QString m_currentUser;
     QString m_userRole;
 
-    // Supply Chain Data (in-memory, saved to xlsx files)
+    // Supply Chain Data (in-memory caches of the database tables)
     QVector<QVariantMap> m_vendors;
     QVector<QVariantMap> m_itemMaster;
     QVector<QVariantMap> m_purchaseOrders;
+    QVector<QVariantMap> m_poItems;        // line items of all POs
     QVector<QVariantMap> m_stockMovements;
     QVector<QVariantMap> m_issueNotes;
     QVector<QVariantMap> m_grnRecords;
@@ -290,6 +350,15 @@ private:
 
     void loadPurchaseOrders();
     void savePurchaseOrders();
+    void loadPOItems();
+    // Stock grid persistence in the shared database.
+    bool loadStockFromDb();
+    void saveStockToDb();
+    // Recomputes a PO header's qty/total/received/summary from its lines.
+    void recalcPOHeader(QVariantMap &po);
+    // Resolves blanks in a PO line from the item master; returns false with
+    // an error emitted when validation fails.
+    bool resolvePOLine(QVariantMap &line);
     void loadStockMovements();
     void saveStockMovements();
     void loadIssueNotes();

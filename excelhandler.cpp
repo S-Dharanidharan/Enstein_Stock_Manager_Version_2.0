@@ -1,4 +1,6 @@
 #include "excelhandler.h"
+#include "dbmanager.h"
+#include "serversetup.h"
 #include <QFileDialog>
 #include <QtMath>
 
@@ -12,6 +14,145 @@ static int toStockInt(const QVariant &value)
     }
     return qRound(number);
 }
+
+// ==================== DB field mapping ====================
+// Maps the application/QML QVariantMap keys to their SQL columns so the
+// existing in-memory caches (m_vendors, m_purchaseOrders, ...) can be
+// persisted to and loaded from the database without changing the keys the
+// QML layer relies on.
+namespace {
+struct DbField {
+    const char *column;   // SQL column name
+    const char *key;      // QVariantMap key used by the app / QML
+    char type;            // 's' string, 'i' int, 'd' double
+};
+
+const QVector<DbField> kVendorFields = {
+    {"vendor_name",    "vendorName",    's'},
+    {"vendor_address", "vendorAddress", 's'},
+    {"bank_branch",    "bankBranch",    's'},
+    {"ifsc",           "ifsc",          's'},
+    {"account_number", "accountNumber", 's'},
+    {"cin",            "cin",           's'},
+    {"gstin",          "gstin",         's'},
+    {"pan_number",     "panNumber",     's'},
+    {"pan_name",       "panName",       's'},
+    {"contact_person", "contactPerson", 's'},
+    {"email",          "email",         's'},
+    {"phone",          "phone",         's'},
+    {"item_category",  "itemCategory",  's'},
+};
+
+const QVector<DbField> kItemFields = {
+    {"part_no",      "partNo",      's'},
+    {"part_name",    "partName",    's'},
+    {"category",     "category",    's'},
+    {"department",   "department",  's'},
+    {"vendor",       "vendor",      's'},
+    {"required_qty", "requiredQty", 'i'},
+    {"unit_price",   "unitPrice",   'd'},
+    {"stock_qty",    "stockQty",    'i'},
+};
+
+const QVector<DbField> kPoFields = {
+    {"po_no",         "poNo",         's'},
+    {"po_date",       "date",         's'},
+    {"vendor",        "vendor",       's'},
+    {"part_name",     "partName",     's'},
+    {"part_no",       "partNo",       's'},
+    {"department",    "department",   's'},
+    {"qty",           "qty",          'i'},
+    {"unit_price",    "unitPrice",    'd'},
+    {"total_amount",  "totalAmount",  'd'},
+    {"expected_date", "expectedDate", 's'},
+    {"status",        "status",       's'},
+    {"received_qty",  "receivedQty",  'i'},
+    {"prepared_by",   "preparedBy",   's'},
+    {"approved_by",   "approvedBy",   's'},
+    {"received_by",   "receivedBy",   's'},
+    {"received_date", "receivedDate", 's'},
+};
+
+const QVector<DbField> kPoItemFields = {
+    {"id",           "id",           'i'},
+    {"po_no",        "poNo",         's'},
+    {"part_name",    "partName",     's'},
+    {"part_no",      "partNo",       's'},
+    {"vendor",       "vendor",       's'},
+    {"department",   "department",   's'},
+    {"qty",          "qty",          'i'},
+    {"unit_price",   "unitPrice",    'd'},
+    {"total_amount", "totalAmount",  'd'},
+    {"received_qty", "receivedQty",  'i'},
+};
+
+const QVector<DbField> kGrnFields = {
+    {"grn_no",       "grnNo",       's'},
+    {"po_no",        "poNo",        's'},
+    {"grn_date",     "date",        's'},
+    {"part_name",    "partName",    's'},
+    {"received_qty", "receivedQty", 'i'},
+    {"accepted_qty", "acceptedQty", 'i'},
+    {"rejected_qty", "rejectedQty", 'i'},
+    {"remarks",      "remarks",     's'},
+    {"received_by",  "receivedBy",  's'},
+};
+
+const QVector<DbField> kMovementFields = {
+    {"mov_date",  "date",     's'},
+    {"part_name", "partName", 's'},
+    {"part_no",   "partNo",   's'},
+    {"type",      "type",     's'},
+    {"qty",       "qty",      'i'},
+    {"reference", "reference",'s'},
+    {"done_by",   "doneBy",   's'},
+};
+
+const QVector<DbField> kIssueFields = {
+    {"issue_no",   "issueNo",    's'},
+    {"issue_date", "date",       's'},
+    {"part_name",  "partName",   's'},
+    {"qty",        "qty",        'i'},
+    {"department", "department", 's'},
+    {"issued_by",  "issuedBy",   's'},
+};
+
+QVariant coerce(const QVariant &v, char type) {
+    switch (type) {
+    case 'i': return v.toInt();
+    case 'd': return v.toDouble();
+    default:  return v.toString();
+    }
+}
+
+QVariantMap dbRowToApp(const QVector<DbField> &fields, const QVariantMap &dbRow) {
+    QVariantMap out;
+    for (const DbField &f : fields)
+        out[f.key] = coerce(dbRow.value(f.column), f.type);
+    return out;
+}
+
+QVariantMap appRowToDb(const QVector<DbField> &fields, const QVariantMap &appRow) {  
+    QVariantMap out;
+    for (const DbField &f : fields)
+        out[f.column] = coerce(appRow.value(f.key), f.type);
+    return out;
+}
+
+QVector<QVariantMap> dbRowsToApp(const QVector<DbField> &fields, const QVector<QVariantMap> &dbRows) {
+    QVector<QVariantMap> out;
+    out.reserve(dbRows.size());
+    for (const QVariantMap &r : dbRows) out.append(dbRowToApp(fields, r));
+    return out;
+}
+
+QVector<QVariantMap> appRowsToDb(const QVector<DbField> &fields, const QVector<QVariantMap> &appRows) {
+    QVector<QVariantMap> out;
+    out.reserve(appRows.size());
+    for (const QVariantMap &r : appRows) out.append(appRowToDb(fields, r));
+    return out;
+}
+} // namespace
 
 // ==================== ExcelTableModel Implementation ====================
 
@@ -132,6 +273,8 @@ void ExcelTableModel::clear()
 
 ExcelHandler::ExcelHandler(QObject *parent)
     : QObject(parent),
+    m_db(new DatabaseManager(this)),
+    m_serverSetup(new ServerSetup(this)),
     m_model(new ExcelTableModel(this)),
     m_hasUnsavedChanges(false),
     m_syncEnabled(false),
@@ -162,18 +305,50 @@ ExcelHandler::ExcelHandler(QObject *parent)
     initializeDataDirectory();
     loadPermanentFileSettings();
     loadCloudSettings();
-    updateAutoSyncState();
 
-    // Load supply chain data
+    // Storage now lives in a shared SQL database instead of a Dropbox folder,
+    // so the old folder-based cloud sync stays disabled.
+    m_syncEnabled = false;
+
+    // Connect to the shared database (Postgres in production, local SQLite
+    // fallback otherwise) and build the schema before loading any data.
+    if (!m_db->connectDatabase()) {
+        emit errorOccurred("Could not open the database: " + m_db->lastError());
+    }
+    connect(m_db, &DatabaseManager::databaseError,
+            this, [this](const QString &msg) { emit errorOccurred(msg); });
+
+    connect(m_serverSetup, &ServerSetup::progress,
+            this, &ExcelHandler::serverProvisionProgress);
+    connect(m_serverSetup, &ServerSetup::finished, this,
+            [this](bool success, const QVariantMap &result) {
+                if (success) {
+                    // Reconnect this machine itself to the shared database
+                    // it just provisioned, using the exact same client path
+                    // every other workstation will use.
+                    configureDatabase("QPSQL", "localhost", result.value("port").toInt(),
+                                       result.value("name").toString(),
+                                       result.value("user").toString(),
+                                       result.value("password").toString());
+                }
+                emit serverProvisionFinished(success, result);
+            });
+
+    // Load supply chain data from the database
     loadVendors();
     loadItemMaster();
     loadPurchaseOrders();
     loadStockMovements();
     loadIssueNotes();
     loadGRNRecords();
-    loadSupplyChainCounters();
 
-    qDebug() << "ExcelHandler created with Supply Chain support";
+    // The stock grid also lives in the shared database. Fall back to an
+    // empty default grid on a fresh database (no permanent file needed).
+    if (!loadStockFromDb())
+        createStockFile(15);
+
+    qDebug() << "ExcelHandler created with Supply Chain support (DB backend:"
+             << m_db->backendName() << ")";
     qDebug() << "Vendors:" << m_vendors.size()
              << "| POs:" << m_purchaseOrders.size()
              << "| Movements:" << m_stockMovements.size();
@@ -226,91 +401,18 @@ void ExcelHandler::saveSupplyChainCounters()
 void ExcelHandler::loadVendors()
 {
     m_vendors.clear();
-    QString path = m_dataDir + "/vendors.xlsx";
-
-    if (!QFile::exists(path)) return;
-
-    QXlsx::Document xlsx(path);
-    if (!xlsx.load()) return;
-
-    QXlsx::Worksheet *sheet = xlsx.currentWorksheet();
-    if (!sheet) return;
-
-    QXlsx::CellRange range = sheet->dimension();
-
-    for (int row = 2; row <= range.lastRow(); ++row) {
-        QVariantMap vendor;
-        vendor["vendorName"]    = sheet->cellAt(row, 1) ? sheet->cellAt(row, 1)->value().toString() : "";
-        vendor["vendorAddress"] = sheet->cellAt(row, 2) ? sheet->cellAt(row, 2)->value().toString() : "";
-        vendor["bankBranch"]    = sheet->cellAt(row, 3) ? sheet->cellAt(row, 3)->value().toString() : "";
-        vendor["ifsc"]          = sheet->cellAt(row, 4) ? sheet->cellAt(row, 4)->value().toString() : "";
-        vendor["accountNumber"] = sheet->cellAt(row, 5) ? sheet->cellAt(row, 5)->value().toString() : "";
-        vendor["cin"]           = sheet->cellAt(row, 6) ? sheet->cellAt(row, 6)->value().toString() : "";
-        vendor["gstin"]         = sheet->cellAt(row, 7) ? sheet->cellAt(row, 7)->value().toString() : "";
-        vendor["panNumber"]     = sheet->cellAt(row, 8) ? sheet->cellAt(row, 8)->value().toString() : "";
-        vendor["panName"]       = sheet->cellAt(row, 9) ? sheet->cellAt(row, 9)->value().toString() : "";
-        vendor["contactPerson"] = sheet->cellAt(row, 10) ? sheet->cellAt(row, 10)->value().toString() : "";
-        vendor["email"]         = sheet->cellAt(row, 11) ? sheet->cellAt(row, 11)->value().toString() : "";
-        vendor["phone"]         = sheet->cellAt(row, 12) ? sheet->cellAt(row, 12)->value().toString() : "";
-        vendor["itemCategory"]  = sheet->cellAt(row, 13) ? sheet->cellAt(row, 13)->value().toString() : "";
-
-        // Backward compatibility with old vendor sheet layout (12 columns)
-        if (vendor["itemCategory"].toString().trimmed().isEmpty() &&
-            sheet->cellAt(row, 12) &&
-            !sheet->cellAt(row, 12)->value().toString().trimmed().isEmpty()) {
-            vendor["itemCategory"] = sheet->cellAt(row, 12)->value().toString();
-            vendor["phone"] = "";
-        }
-
-        if (!vendor["vendorName"].toString().trimmed().isEmpty()) {
-            m_vendors.append(vendor);
-        }
-    }
+    if (!m_db) return;
+    m_vendors = dbRowsToApp(kVendorFields, m_db->selectAll("vendors", "vendor_name"));
     qDebug() << "Loaded" << m_vendors.size() << "vendors";
 }
 
 bool ExcelHandler::saveVendors()
 {
-    QString path = m_dataDir + "/vendors.xlsx";
-    QXlsx::Document xlsx;
-
-    // Header
-    xlsx.write(1, 1, "Vendor Name");
-    xlsx.write(1, 2, "Vendor Address");
-    xlsx.write(1,3, "Bank Branch");
-    xlsx.write(1,4, "IFSC");
-    xlsx.write(1,5, "Account Number");
-    xlsx.write(1,6, "CIN");
-    xlsx.write(1,7, "GSTIN");
-    xlsx.write(1,8, "PAN");
-    xlsx.write(1,9, "PAN Name");
-    xlsx.write(1,10, "Contact Person");
-    xlsx.write(1,11, "Email");
-    xlsx.write(1,12, "Phone");
-    xlsx.write(1,13, "Item Category");
-
-    for (int i = 0; i < m_vendors.size(); ++i) {
-        int row = i + 2;
-        xlsx.write(row, 1, m_vendors[i]["vendorName"]);
-        xlsx.write(row, 2, m_vendors[i]["vendorAddress"]);
-        xlsx.write(row, 3, m_vendors[i]["bankBranch"]);
-        xlsx.write(row, 4, m_vendors[i]["ifsc"]);
-        xlsx.write(row, 5, m_vendors[i]["accountNumber"]);
-        xlsx.write(row, 6, m_vendors[i]["cin"]);
-        xlsx.write(row, 7, m_vendors[i]["gstin"]);
-        xlsx.write(row, 8, m_vendors[i]["panNumber"]);
-        xlsx.write(row, 9, m_vendors[i]["panName"]);
-        xlsx.write(row, 10, m_vendors[i]["contactPerson"]);
-        xlsx.write(row, 11, m_vendors[i]["email"]);
-        xlsx.write(row, 12, m_vendors[i]["phone"]);
-        xlsx.write(row, 13, m_vendors[i]["itemCategory"]);
-    }
-                                
-    if (!xlsx.saveAs(path)) {
+    if (!m_db) return false;
+    if (!m_db->replaceAll("vendors", appRowsToDb(kVendorFields, m_vendors))) {
         emit errorOccurred("Failed to save vendor data");
         return false;
     }
-
     qDebug() << "Saved" << m_vendors.size() << "vendors";
     return true;
 }
@@ -335,7 +437,7 @@ bool ExcelHandler::addVendorDetails(QVariantMap vendor)
     qDebug()<<"Adding vendor:" << vendor;
     m_vendors.append(vendor);
     qDebug() << "Vendor added to list:" << vendor;
-    qDebug() << "Current vendor count:" << m_vendors.size();      
+    qDebug() << "Current vendor count:" << m_vendors.size();    
     if (!saveVendors()) {
         m_vendors.removeLast();
         return false;
@@ -471,55 +573,15 @@ QVariantMap ExcelHandler::getVendorByName(const QString &name)
 void ExcelHandler::loadItemMaster()
 {
     m_itemMaster.clear();
-    QString path = m_dataDir + "/item_master.xlsx";
-
-    if (!QFile::exists(path)) return;
-
-    QXlsx::Document xlsx(path);
-    if (!xlsx.load()) return;
-
-    QXlsx::Worksheet *sheet = xlsx.currentWorksheet();
-    if (!sheet) return;
-
-    QXlsx::CellRange range = sheet->dimension();
-
-    for (int row = 2; row <= range.lastRow(); ++row) {
-        QVariantMap item;
-        item["partNo"]   = sheet->cellAt(row, 1) ? sheet->cellAt(row, 1)->value().toString() : "";
-        item["partName"] = sheet->cellAt(row, 2) ? sheet->cellAt(row, 2)->value().toString() : "";
-        item["category"] = sheet->cellAt(row, 3) ? sheet->cellAt(row, 3)->value().toString() : "";
-        item["unitPrice"] = sheet->cellAt(row, 4) ? sheet->cellAt(row, 4)->value().toDouble() : 0.0;
-        item["stockQty"] = sheet->cellAt(row, 5) ? sheet->cellAt(row, 5)->value().toInt() : 0;
-
-        if (!item["partNo"].toString().trimmed().isEmpty()) {
-            m_itemMaster.append(item);
-        }
-    }
+    if (!m_db) return;
+    m_itemMaster = dbRowsToApp(kItemFields, m_db->selectAll("item_master", "part_no"));
     qDebug() << "Loaded" << m_itemMaster.size() << "items in Item Master";
 }
 
 void ExcelHandler::saveItemMaster()
 {
-    QString path = m_dataDir + "/item_master.xlsx";
-    QXlsx::Document xlsx;
-
-    // Header
-    xlsx.write(1, 1, "Part No");
-    xlsx.write(1, 2, "Part Name");
-    xlsx.write(1, 3, "Category");
-    xlsx.write(1, 4, "Unit Price");
-    xlsx.write(1, 5, "Stock Quantity");
-
-    for (int i = 0; i < m_itemMaster.size(); ++i) {
-        int row = i + 2;
-        xlsx.write(row, 1, m_itemMaster[i]["partNo"]);
-        xlsx.write(row, 2, m_itemMaster[i]["partName"]);
-        xlsx.write(row, 3, m_itemMaster[i]["category"]);
-        xlsx.write(row, 4, m_itemMaster[i]["unitPrice"]);
-        xlsx.write(row, 5, m_itemMaster[i]["stockQty"]);
-    }
-
-    xlsx.saveAs(path);
+    if (!m_db) return;
+    m_db->replaceAll("item_master", appRowsToDb(kItemFields, m_itemMaster));
 }
 
 bool ExcelHandler::addItemMasterDetails(QVariantMap itemDetails) 
@@ -540,6 +602,7 @@ bool ExcelHandler::addItemMasterDetails(QVariantMap itemDetails)
     m_itemMaster.append(itemDetails);
     saveItemMaster();
     emit itemMasterListChanged();
+    emit lowStockCountChanged();
     return true;
 }
 
@@ -548,7 +611,7 @@ bool ExcelHandler::updateItemMasterDetails(QVariantMap itemDetails)
     QString originalPartNo = itemDetails.value("originalPartNo").toString().trimmed();
     QString newPartNo = itemDetails.value("partNo").toString().trimmed();
     if (newPartNo.isEmpty()) {
-        emit errorOccurred("Part number is required");
+        emit errorOccurred("Part number is required");           
         return false;
     }
 
@@ -612,6 +675,7 @@ bool ExcelHandler::updateItemMasterDetails(QVariantMap itemDetails)
 
     saveItemMaster();
     emit itemMasterListChanged();
+    emit lowStockCountChanged();
     return true;
 }
 
@@ -631,6 +695,7 @@ bool ExcelHandler::deleteItem(const QString &partName)
             m_itemMaster.removeAt(i);
             saveItemMaster();
             emit itemMasterListChanged();
+            emit lowStockCountChanged();
             return true;
         }
     }
@@ -643,138 +708,272 @@ bool ExcelHandler::deleteItem(const QString &partName)
 void ExcelHandler::loadPurchaseOrders()
 {
     m_purchaseOrders.clear();
-    QString path = m_dataDir + "/purchase_orders.xlsx";
+    if (!m_db) return;
+    m_purchaseOrders = dbRowsToApp(kPoFields, m_db->selectAll("purchase_orders", "po_no"));
 
-    if (!QFile::exists(path)) return;
-
-    QXlsx::Document xlsx(path);
-    if (!xlsx.load()) return;
-
-    QXlsx::Worksheet *sheet = xlsx.currentWorksheet();
-    if (!sheet) return;
-
-    QXlsx::CellRange range = sheet->dimension();
-    if (range.lastRow() < 2) return;
-
-    QHash<QString, int> headerColumns;
-    for (int col = 1; col <= range.lastColumn(); ++col) {
-        auto headerCell = sheet->cellAt(1, col);
-        QString header = headerCell ? headerCell->value().toString().trimmed().toLower() : "";
-        if (!header.isEmpty()) {
-            headerColumns.insert(header, col);
-        }
-    }
-
-    auto columnFor = [&headerColumns](const QString &headerName, int fallbackColumn) {
-        return headerColumns.contains(headerName.toLower()) ? headerColumns.value(headerName.toLower()) : fallbackColumn;
-    };
-
-    const int colPoNo = columnFor("po no", 1);
-    const int colDate = columnFor("date", 2);
-    const int colVendor = columnFor("vendor", 3);
-    const int colPartName = columnFor("part name", 4);
-    const int colPartNo = columnFor("part no", 5);
-    const int colDepartment = columnFor("department", -1);
-    const int colQty = columnFor("qty", 6);
-    const int colUnitPrice = columnFor("unit price", 7);
-    const int colTotalAmount = columnFor("total amount", 8);
-    const int colExpectedDate = columnFor("expected date", 9);
-    const int colStatus = columnFor("status", 10);
-    const int colReceivedQty = columnFor("received qty", 11);
-    const int colPreparedBy = columnFor("prepared by", -1);
-    const int colApprovedBy = columnFor("approved by", -1);
-    const int colReceivedBy = columnFor("received by", -1);
-    const int colReceivedDate = columnFor("received date", -1);
-
-    for (int row = 2; row <= range.lastRow(); ++row) {
-        auto getCellValue = [sheet, row](int col) -> QVariant {
-            if (col < 1) return QVariant();
-            auto cell = sheet->cellAt(row, col);
-            return cell ? cell->value() : QVariant();
-        };
-
-        QVariantMap po;
-        po["poNo"]         = getCellValue(colPoNo).toString();
-        po["date"]         = getCellValue(colDate).toString();
-        po["vendor"]       = getCellValue(colVendor).toString();
-        po["partName"]     = getCellValue(colPartName).toString();
-        po["partNo"]       = getCellValue(colPartNo).toString();
-        po["department"]   = getCellValue(colDepartment).toString();
-        po["qty"]          = getCellValue(colQty).toInt();
-        po["unitPrice"]    = getCellValue(colUnitPrice).toDouble();
-        po["totalAmount"]  = getCellValue(colTotalAmount).toDouble();
-        po["expectedDate"] = getCellValue(colExpectedDate).toString();
-        po["status"]       = getCellValue(colStatus).toString();
-        po["receivedQty"]  = getCellValue(colReceivedQty).toInt();
-        po["preparedBy"]   = getCellValue(colPreparedBy).toString();
-        po["approvedBy"]   = getCellValue(colApprovedBy).toString();
-        po["receivedBy"]   = getCellValue(colReceivedBy).toString();
-        po["receivedDate"] = getCellValue(colReceivedDate).toString();
-
-        if (po["status"].toString().trimmed().isEmpty()) {
+    // Apply the same defaults the old loader used.
+    for (QVariantMap &po : m_purchaseOrders) {
+        if (po["status"].toString().trimmed().isEmpty())
             po["status"] = "Draft";
-        }
-
-        if (po["totalAmount"].toDouble() <= 0.0 && po["qty"].toInt() > 0 && po["unitPrice"].toDouble() > 0.0) {
+        if (po["totalAmount"].toDouble() <= 0.0 && po["qty"].toInt() > 0 && po["unitPrice"].toDouble() > 0.0)
             po["totalAmount"] = po["qty"].toInt() * po["unitPrice"].toDouble();
-        }
-
-        if (!po["poNo"].toString().trimmed().isEmpty()) {
-            m_purchaseOrders.append(po);
-        }
     }
 
-    qDebug() << "Loaded" << m_purchaseOrders.size() << "purchase orders";
+    loadPOItems();
+
+    qDebug() << "Loaded" << m_purchaseOrders.size() << "purchase orders ("
+             << m_poItems.size() << "line items )";
 }
 
 void ExcelHandler::savePurchaseOrders()
 {
-    QString path = m_dataDir + "/purchase_orders.xlsx";
-    QXlsx::Document xlsx;
+    if (!m_db) return;
+    m_db->replaceAll("purchase_orders", appRowsToDb(kPoFields, m_purchaseOrders));
+}
 
-    xlsx.write(1, 1, "PO No");
-    xlsx.write(1, 2, "Date");
-    xlsx.write(1, 3, "Vendor");
-    xlsx.write(1, 4, "Part Name");
-    xlsx.write(1, 5, "Part No");
-    xlsx.write(1, 6, "Department");
-    xlsx.write(1, 7, "Qty");
-    xlsx.write(1, 8, "Unit Price");
-    xlsx.write(1, 9, "Total Amount");
-    xlsx.write(1, 10, "Expected Date");
-    xlsx.write(1, 11, "Status");
-    xlsx.write(1, 12, "Received Qty");
-    xlsx.write(1, 13, "Prepared By");
-    xlsx.write(1, 14, "Approved By");
-    xlsx.write(1, 15, "Received By");
-    xlsx.write(1, 16, "Received Date");
+// ==================== STOCK GRID <-> DATABASE ====================
+// The dashboard grid columns, in model order 0..8.
+static const char *kStockDbColumns[] = {
+    "part_name", "part_no", "stock", "department", "prepared",
+    "approved", "vendor", "row_date", "unit_price"
+};
 
-    for (int i = 0; i < m_purchaseOrders.size(); ++i) {
-        int row = i + 2;
-        xlsx.write(row, 1,  m_purchaseOrders[i]["poNo"]);
-        xlsx.write(row, 2,  m_purchaseOrders[i]["date"]);
-        xlsx.write(row, 3,  m_purchaseOrders[i]["vendor"]);
-        xlsx.write(row, 4,  m_purchaseOrders[i]["partName"]);
-        xlsx.write(row, 5,  m_purchaseOrders[i]["partNo"]);
-        xlsx.write(row, 6,  m_purchaseOrders[i]["department"]);
-        xlsx.write(row, 7,  m_purchaseOrders[i]["qty"]);
-        xlsx.write(row, 8,  m_purchaseOrders[i]["unitPrice"]);
-        xlsx.write(row, 9,  m_purchaseOrders[i]["totalAmount"]);
-        xlsx.write(row, 10, m_purchaseOrders[i]["expectedDate"]);
-        xlsx.write(row, 11, m_purchaseOrders[i]["status"]);
-        xlsx.write(row, 12, m_purchaseOrders[i]["receivedQty"]);
-        xlsx.write(row, 13, m_purchaseOrders[i]["preparedBy"]);
-        xlsx.write(row, 14, m_purchaseOrders[i]["approvedBy"]);
-        xlsx.write(row, 15, m_purchaseOrders[i]["receivedBy"]);
-        xlsx.write(row, 16, m_purchaseOrders[i]["receivedDate"]);
+bool ExcelHandler::loadStockFromDb()
+{
+    if (!m_db) return false;
+    const QVector<QVariantMap> rows = m_db->selectAll("stock_rows", "id");
+    if (rows.isEmpty()) return false;
+
+    QVector<QVector<QVariant>> data;
+    data.reserve(rows.size() + 1);
+    data.append({"Part Name", "Part No", "Stock",
+                 "Department", "Prepared", "Approved", "Vendor Name",
+                 "Date", "Unit Price"});
+
+    for (const QVariantMap &r : rows) {
+        QVector<QVariant> row(9);
+        for (int c = 0; c < 9; ++c) {
+            QVariant v = r.value(QLatin1String(kStockDbColumns[c]));
+            // Keep empty cells empty instead of showing 0s.
+            if (!v.isNull() && v.toString() != "")
+                row[c] = v;
+        }
+        data.append(row);
     }
 
-    xlsx.saveAs(path);
+    m_model->setExcelData(data);
+    setUnsavedChanges(false);
+    qDebug() << "Loaded" << rows.size() << "stock rows from database";
+    return true;
+}
+
+void ExcelHandler::saveStockToDb()
+{
+    if (!m_db || !m_db->isConnected()) return;
+
+    QVector<QVariantMap> rows;
+    const int rowCount = m_model->rowCount();
+    for (int r = 1; r < rowCount; ++r) {           // skip header row
+        QVariantMap row;
+        bool empty = true;
+        for (int c = 0; c < 9; ++c) {
+            QVariant v = m_model->getData(r, c);
+            if (!v.toString().trimmed().isEmpty()) empty = false;
+            row[QLatin1String(kStockDbColumns[c])] = v.toString().isEmpty() ? QVariant(QString()) : v;
+        }
+        if (!empty) rows.append(row);
+    }
+
+    m_db->replaceAll("stock_rows", rows);
+}
+
+bool ExcelHandler::importStockFile(const QString &filePath)
+{
+    // Loads the user's stock xlsx (with the usual normalisation and legacy
+    // column migration) and stores it as the shared stock in the database.
+    if (!loadExcel(filePath))
+        return false;
+
+    saveStockToDb();
+    setUnsavedChanges(false);
+    emit lowStockCountChanged();
+    qDebug() << "Imported stock file into database:" << filePath;
+    return true;
+}
+
+void ExcelHandler::loadPOItems()
+{
+    m_poItems.clear();
+    if (!m_db) return;
+    m_poItems = dbRowsToApp(kPoItemFields, m_db->selectAll("po_items", "id"));
+
+    // Keep header aggregates (qty/total/received/item count) in sync with
+    // the lines so the PO list always reflects the shared database.
+    for (QVariantMap &po : m_purchaseOrders)
+        recalcPOHeader(po);
+}
+
+void ExcelHandler::recalcPOHeader(QVariantMap &po)
+{
+    const QString poNo = po["poNo"].toString();
+    int count = 0, totalQty = 0, totalReceived = 0;
+    double totalAmount = 0.0;
+    QString firstPart, firstPartNo, firstDept;
+    QStringList vendors;
+
+    for (const QVariantMap &line : m_poItems) {
+        if (line["poNo"].toString() != poNo) continue;
+        if (count == 0) {
+            firstPart = line["partName"].toString();
+            firstPartNo = line["partNo"].toString();
+            firstDept = line["department"].toString();
+        }
+        ++count;
+        totalQty += line["qty"].toInt();
+        totalReceived += line["receivedQty"].toInt();
+        totalAmount += line["totalAmount"].toDouble();
+        const QString vendor = line["vendor"].toString().trimmed();
+        if (!vendor.isEmpty() && !vendors.contains(vendor))
+            vendors << vendor;
+    }
+
+    if (count == 0) return;   // header-only PO (should not happen post-migration)
+
+    po["itemCount"] = count;
+    po["qty"] = totalQty;
+    po["receivedQty"] = totalReceived;
+    po["totalAmount"] = totalAmount;
+    po["partName"] = (count == 1) ? firstPart
+                                  : firstPart + " +" + QString::number(count - 1) + " more";
+    po["partNo"] = (count == 1) ? firstPartNo : QString();
+    po["department"] = (count == 1) ? firstDept : QString();
+    po["vendor"] = vendors.join(", ");
+    if (count > 1)
+        po["unitPrice"] = 0.0;   // meaningless across mixed lines
+}
+
+bool ExcelHandler::resolvePOLine(QVariantMap &line)
+{
+    const QString partName = line["partName"].toString().trimmed();
+    if (partName.isEmpty()) {
+        emit errorOccurred("Part Name is required for every PO item");
+        return false;
+    }
+    if (line["qty"].toInt() <= 0) {
+        emit errorOccurred("Quantity must be greater than 0 for: " + partName);
+        return false;
+    }
+
+    // Fill blanks from the item master (matching the old single-item logic).
+    for (const auto &item : m_itemMaster) {
+        if (item["partName"].toString().trimmed().compare(partName, Qt::CaseInsensitive) == 0) {
+            if (line["partNo"].toString().trimmed().isEmpty())
+                line["partNo"] = item["partNo"].toString().trimmed();
+            if (line["department"].toString().trimmed().isEmpty())
+                line["department"] = item["department"].toString().trimmed();
+            if (line["vendor"].toString().trimmed().isEmpty())
+                line["vendor"] = item["vendor"].toString().trimmed();
+            if (line["unitPrice"].toDouble() <= 0.0)
+                line["unitPrice"] = item["unitPrice"].toDouble();
+            break;
+        }
+    }
+
+    if (line["vendor"].toString().trimmed().isEmpty()) {
+        emit errorOccurred("Vendor is required for: " + partName);
+        return false;
+    }
+
+    line["partName"] = partName;
+    line["totalAmount"] = line["qty"].toInt() * line["unitPrice"].toDouble();
+    line["receivedQty"] = 0;
+    return true;
 }
 
 QString ExcelHandler::getNextPONumber()
 {
-    return "PO-" + QString::number(m_nextPONumber).rightJustified(4, '0');
+    int next = m_db ? m_db->peekCounter("po") : m_nextPONumber;
+    return "PO-" + QString::number(next).rightJustified(4, '0');
+}
+
+QString ExcelHandler::createPurchaseOrderItems(const QVariantList &items,
+                                               const QString &expectedDate,
+                                               const QString &preparedBy)
+{
+    if (items.isEmpty()) {
+        emit errorOccurred("Add at least one item to the purchase order");
+        return "";
+    }
+
+    // Validate and resolve every line BEFORE anything is written.
+    QVector<QVariantMap> lines;
+    for (const QVariant &v : items) {
+        QVariantMap line = v.toMap();
+        if (!resolvePOLine(line))
+            return "";
+        lines.append(line);
+    }
+
+    const QString resolvedPreparedBy =
+        preparedBy.trimmed().isEmpty() ? m_currentUser : preparedBy.trimmed();
+
+    // Atomic, shared PO number so concurrent users never collide.
+    int poSeq = m_db ? m_db->nextCounter("po") : m_nextPONumber++;
+    QString poNo = "PO-" + QString::number(poSeq).rightJustified(4, '0');
+
+    // Header (aggregates recomputed from lines by recalcPOHeader).
+    QVariantMap po;
+    po["poNo"]         = poNo;
+    po["date"]         = QDateTime::currentDateTime().toString("yyyy-MM-dd");
+    po["vendor"]       = "";
+    po["partName"]     = "";
+    po["partNo"]       = "";
+    po["department"]   = "";
+    po["qty"]          = 0;
+    po["unitPrice"]    = 0.0;
+    po["totalAmount"]  = 0.0;
+    po["expectedDate"] = expectedDate;
+    po["status"]       = "Draft";
+    po["receivedQty"]  = 0;
+    po["preparedBy"]   = resolvedPreparedBy;
+    po["approvedBy"]   = "";
+    po["receivedBy"]   = "";
+    po["receivedDate"] = "";
+
+    // Persist lines first (insert without id so the serial is assigned),
+    // then reload to pick up the generated ids.
+    for (QVariantMap &line : lines) {
+        line["poNo"] = poNo;
+        QVariantMap dbRow = appRowToDb(kPoItemFields, line);
+        dbRow.remove("id");
+        if (m_db) m_db->insert("po_items", dbRow);
+    }
+    if (m_db) m_poItems = dbRowsToApp(kPoItemFields, m_db->selectAll("po_items", "id"));
+
+    recalcPOHeader(po);
+    m_purchaseOrders.append(po);
+    savePurchaseOrders();
+    emit pendingPOCountChanged();
+    emit lowStockCountChanged();   // new open orders reduce the shortage list
+    emit purchaseOrderCreated(poNo);
+
+    for (const QVariantMap &line : lines) {
+        logStockMovement(line["partName"].toString(), line["partNo"].toString(),
+                         "PO_CREATED", line["qty"].toInt(), poNo, m_currentUser);
+    }
+
+    qDebug() << "Created PO:" << poNo << "with" << lines.size() << "items";
+    return poNo;
+}
+
+QVariantList ExcelHandler::getPOItems(const QString &poNo)
+{
+    QVariantList list;
+    for (const auto &line : m_poItems) {
+        if (line["poNo"].toString() == poNo)
+            list.append(line);
+    }
+    return list;
 }
 
 QString ExcelHandler::createPurchaseOrder(const QString &vendor,
@@ -785,69 +984,14 @@ QString ExcelHandler::createPurchaseOrder(const QString &vendor,
                                           const QString &department,
                                           const QString &preparedBy)
 {
-    if (partName.trimmed().isEmpty()) {
-        emit errorOccurred("Part Name is required");
-        return "";
-    }
-
-    if (qty <= 0) {
-        emit errorOccurred("Quantity must be greater than 0");
-        return "";
-    }
-
-    QString resolvedVendor = vendor.trimmed();
-    QString resolvedDepartment = department.trimmed();
-    QString resolvedPreparedBy = preparedBy.trimmed().isEmpty() ? m_currentUser : preparedBy.trimmed();
-    QString resolvedPartNo = partNo.trimmed();
-    double resolvedUnitPrice = unitPrice;
-
-    for (const auto &item : m_itemMaster) {
-        if (item["partName"].toString().trimmed().compare(partName.trimmed(), Qt::CaseInsensitive) == 0) {
-            if (resolvedPartNo.isEmpty()) resolvedPartNo = item["partNo"].toString().trimmed();
-            if (resolvedDepartment.isEmpty()) resolvedDepartment = item["department"].toString().trimmed();
-            if (resolvedVendor.isEmpty()) resolvedVendor = item["vendor"].toString().trimmed();
-            if (resolvedUnitPrice <= 0.0) resolvedUnitPrice = item["unitPrice"].toDouble();
-            break;
-        }
-    }
-
-    if (resolvedVendor.isEmpty()) {
-        emit errorOccurred("Vendor is required");
-        return "";
-    }
-
-    QString poNo = getNextPONumber();
-    m_nextPONumber++;
-    saveSupplyChainCounters();
-
-    QVariantMap po;
-    po["poNo"]         = poNo;
-    po["date"]         = QDateTime::currentDateTime().toString("yyyy-MM-dd");
-    po["vendor"]       = resolvedVendor;
-    po["partName"]     = partName.trimmed();
-    po["partNo"]       = resolvedPartNo;
-    po["department"]   = resolvedDepartment;
-    po["qty"]          = qty;
-    po["unitPrice"]    = resolvedUnitPrice;
-    po["totalAmount"]  = qty * resolvedUnitPrice;
-    po["expectedDate"] = expectedDate;
-    po["status"]       = "Draft";
-    po["receivedQty"]  = 0;
-    po["preparedBy"]   = resolvedPreparedBy;
-    po["approvedBy"]   = "";
-    po["receivedBy"]   = "";
-    po["receivedDate"] = "";
-
-    m_purchaseOrders.append(po);
-    savePurchaseOrders();
-    emit pendingPOCountChanged();
-    emit purchaseOrderCreated(poNo);
-
-    // Log movement
-    logStockMovement(partName, resolvedPartNo, "PO_CREATED", qty, poNo, m_currentUser);
-
-    qDebug() << "Created PO:" << poNo << "for" << partName << "x" << qty;
-    return poNo;
+    QVariantMap line;
+    line["partName"]   = partName;
+    line["partNo"]     = partNo;
+    line["vendor"]     = vendor;
+    line["department"] = department;
+    line["qty"]        = qty;
+    line["unitPrice"]  = unitPrice;
+    return createPurchaseOrderItems({line}, expectedDate, preparedBy);
 }
 
 bool ExcelHandler::sendPOForApproval(const QString &poNo, const QString &approvedBy)
@@ -934,15 +1078,30 @@ bool ExcelHandler::updatePurchaseOrder(const QString &poNo, const QVariantMap &p
             return false;
         }
 
-        po["vendor"] = vendor;
-        po["partName"] = partName;
-        po["partNo"] = partNo;
-        po["department"] = department;
-        po["qty"] = qty;
-        po["unitPrice"] = unitPrice;
-        po["totalAmount"] = qty * unitPrice;
         po["expectedDate"] = expectedDate;
         po["preparedBy"] = preparedBy;
+
+        // Sync the line item when this PO has exactly one (the edit dialog
+        // is only offered for single-item POs).
+        QVector<QVariantMap *> poLines;
+        for (auto &line : m_poItems)
+            if (line["poNo"].toString() == poNo) poLines.append(&line);
+
+        if (poLines.size() == 1) {
+            QVariantMap &line = *poLines.first();
+            line["vendor"] = vendor;
+            line["partName"] = partName;
+            line["partNo"] = partNo;
+            line["department"] = department;
+            line["qty"] = qty;
+            line["unitPrice"] = unitPrice;
+            line["totalAmount"] = qty * unitPrice;
+            if (m_db) {
+                QVariantMap dbRow = appRowToDb(kPoItemFields, line);
+                m_db->upsert("po_items", {"id"}, dbRow);
+            }
+        }
+        recalcPOHeader(po);
 
         savePurchaseOrders();
         emit pendingPOCountChanged();
@@ -978,75 +1137,38 @@ int ExcelHandler::pendingPOCount() const
 void ExcelHandler::loadGRNRecords()
 {
     m_grnRecords.clear();
-    QString path = m_dataDir + "/grn_records.xlsx";
-
-    if (!QFile::exists(path)) return;
-
-    QXlsx::Document xlsx(path);
-    if (!xlsx.load()) return;
-
-    QXlsx::Worksheet *sheet = xlsx.currentWorksheet();
-    if (!sheet) return;
-
-    QXlsx::CellRange range = sheet->dimension();
-
-    for (int row = 2; row <= range.lastRow(); ++row) {
-        QVariantMap grn;
-        grn["grnNo"]       = sheet->cellAt(row, 1) ? sheet->cellAt(row, 1)->value().toString() : "";
-        grn["poNo"]        = sheet->cellAt(row, 2) ? sheet->cellAt(row, 2)->value().toString() : "";
-        grn["date"]        = sheet->cellAt(row, 3) ? sheet->cellAt(row, 3)->value().toString() : "";
-        grn["partName"]    = sheet->cellAt(row, 4) ? sheet->cellAt(row, 4)->value().toString() : "";
-        grn["receivedQty"] = sheet->cellAt(row, 5) ? sheet->cellAt(row, 5)->value().toInt() : 0;
-        grn["acceptedQty"] = sheet->cellAt(row, 6) ? sheet->cellAt(row, 6)->value().toInt() : 0;
-        grn["rejectedQty"] = sheet->cellAt(row, 7) ? sheet->cellAt(row, 7)->value().toInt() : 0;
-        grn["remarks"]     = sheet->cellAt(row, 8) ? sheet->cellAt(row, 8)->value().toString() : "";
-        grn["receivedBy"]  = sheet->cellAt(row, 9) ? sheet->cellAt(row, 9)->value().toString() : "";
-
-        if (!grn["grnNo"].toString().trimmed().isEmpty()) {
-            m_grnRecords.append(grn);
-        }
-    }
-
+    if (!m_db) return;
+    m_grnRecords = dbRowsToApp(kGrnFields, m_db->selectAll("grn_records", "grn_no"));
     qDebug() << "Loaded" << m_grnRecords.size() << "GRN records";
 }
 
 void ExcelHandler::saveGRNRecords()
 {
-    QString path = m_dataDir + "/grn_records.xlsx";
-    QXlsx::Document xlsx;
-
-    xlsx.write(1, 1, "GRN No");
-    xlsx.write(1, 2, "PO No");
-    xlsx.write(1, 3, "Date");
-    xlsx.write(1, 4, "Part Name");
-    xlsx.write(1, 5, "Received Qty");
-    xlsx.write(1, 6, "Accepted Qty");
-    xlsx.write(1, 7, "Rejected Qty");
-    xlsx.write(1, 8, "Remarks");
-    xlsx.write(1, 9, "Received By");
-
-    for (int i = 0; i < m_grnRecords.size(); ++i) {
-        int row = i + 2;
-        xlsx.write(row, 1, m_grnRecords[i]["grnNo"]);
-        xlsx.write(row, 2, m_grnRecords[i]["poNo"]);
-        xlsx.write(row, 3, m_grnRecords[i]["date"]);
-        xlsx.write(row, 4, m_grnRecords[i]["partName"]);
-        xlsx.write(row, 5, m_grnRecords[i]["receivedQty"]);
-        xlsx.write(row, 6, m_grnRecords[i]["acceptedQty"]);
-        xlsx.write(row, 7, m_grnRecords[i]["rejectedQty"]);
-        xlsx.write(row, 8, m_grnRecords[i]["remarks"]);
-        xlsx.write(row, 9, m_grnRecords[i]["receivedBy"]);
-    }
-
-    xlsx.saveAs(path);
+    if (!m_db) return;
+    m_db->replaceAll("grn_records", appRowsToDb(kGrnFields, m_grnRecords));
 }
 
-QString ExcelHandler::receiveGoods(const QString &poNo,
-                                   int receivedQty, int acceptedQty,
-                                   int rejectedQty, const QString &remarks,
-                                   const QString &receivedBy)
+QString ExcelHandler::receiveGoodsForItem(int itemId,
+                                          int receivedQty, int acceptedQty,
+                                          int rejectedQty, const QString &remarks,
+                                          const QString &receivedBy)
 {
-    // Find the PO
+    // Find the PO line item.
+    QVariantMap *line = nullptr;
+    for (auto &item : m_poItems) {
+        if (item["id"].toInt() == itemId) {
+            line = &item;
+            break;
+        }
+    }
+    if (!line) {
+        emit errorOccurred("PO item not found (id " + QString::number(itemId) + ")");
+        return "";
+    }
+
+    const QString poNo = line->value("poNo").toString();
+
+    // Find the PO header.
     QVariantMap *targetPO = nullptr;
     for (auto &po : m_purchaseOrders) {
         if (po["poNo"].toString() == poNo) {
@@ -1054,7 +1176,6 @@ QString ExcelHandler::receiveGoods(const QString &poNo,
             break;
         }
     }
-
     if (!targetPO) {
         emit errorOccurred("Purchase Order not found: " + poNo);
         return "";
@@ -1066,17 +1187,21 @@ QString ExcelHandler::receiveGoods(const QString &poNo,
         return "";
     }
 
+    if (receivedQty <= 0) {
+        emit errorOccurred("Received quantity must be greater than 0");
+        return "";
+    }
+
     QString receiverName = receivedBy.trimmed().isEmpty() ? m_currentUser : receivedBy.trimmed();
 
-    // Generate GRN number
-    QString grnNo = "GRN-" + QString::number(m_nextGRNNumber).rightJustified(4, '0');
-    m_nextGRNNumber++;
-    saveSupplyChainCounters();
+    // Generate GRN number (atomic, shared)
+    int grnSeq = m_db ? m_db->nextCounter("grn") : m_nextGRNNumber++;
+    QString grnNo = "GRN-" + QString::number(grnSeq).rightJustified(4, '0');
 
-    QString partName = targetPO->value("partName").toString();
-    QString partNo = targetPO->value("partNo").toString();
+    const QString partName = line->value("partName").toString();
+    const QString partNo = line->value("partNo").toString();
 
-    // Create GRN record
+    // Create GRN record for this line.
     QVariantMap grn;
     grn["grnNo"]       = grnNo;
     grn["poNo"]        = poNo;
@@ -1091,45 +1216,53 @@ QString ExcelHandler::receiveGoods(const QString &poNo,
     m_grnRecords.append(grn);
     saveGRNRecords();
 
-    // Update PO received quantity
-    int prevReceived = targetPO->value("receivedQty").toInt();
-    int totalReceived = prevReceived + receivedQty;
-    (*targetPO)["receivedQty"] = totalReceived;
-
-    int orderQty = targetPO->value("qty").toInt();
-    if (totalReceived >= orderQty) {
-        (*targetPO)["status"] = "Received";
-    } else {
-        (*targetPO)["status"] = "Partially Received";
+    // Update the line's received quantity (in memory and in the database).
+    (*line)["receivedQty"] = line->value("receivedQty").toInt() + receivedQty;
+    if (m_db) {
+        QVariantMap upd;
+        upd["id"] = itemId;
+        upd["received_qty"] = line->value("receivedQty").toInt();
+        m_db->upsert("po_items", {"id"}, upd);
     }
+
+    // Recompute the header from all lines: Received only when every line is
+    // fully received, otherwise Partially Received.
+    recalcPOHeader(*targetPO);
+    bool allReceived = true;
+    for (const auto &item : m_poItems) {
+        if (item["poNo"].toString() != poNo) continue;
+        if (item["receivedQty"].toInt() < item["qty"].toInt()) {
+            allReceived = false;
+            break;
+        }
+    }
+    (*targetPO)["status"] = allReceived ? "Received" : "Partially Received";
     (*targetPO)["receivedBy"] = receiverName;
     (*targetPO)["receivedDate"] = QDateTime::currentDateTime().toString("yyyy-MM-dd hh:mm");
 
     savePurchaseOrders();
     emit pendingPOCountChanged();
 
-    // Update stock in main table (add accepted quantity)
-    // Stock column index = 2
+    // Update stock in main table (add accepted quantity). Stock column = 2.
     int partRow = findPartRowByName(partName);
-    QString poDepartment = targetPO->value("department").toString().trimmed();
+    QString lineDepartment = line->value("department").toString().trimmed();
     QString poPreparedBy = targetPO->value("preparedBy").toString().trimmed();
     QString poApprovedBy = targetPO->value("approvedBy").toString().trimmed();
-    QString poVendor = targetPO->value("vendor").toString().trimmed();
-    double poUnitPrice = targetPO->value("unitPrice").toDouble();
+    QString lineVendor = line->value("vendor").toString().trimmed();
+    double lineUnitPrice = line->value("unitPrice").toDouble();
+    QString receivedDate = (*targetPO)["receivedDate"].toString();
 
     if (partRow != -1) {
         int currentStock = toStockInt(m_model->getData(partRow, 2));
         m_model->setDataAt(partRow, 2, currentStock + acceptedQty);
 
-    // Keep dashboard columns in correct order:
-    // 3=Department, 4=Prepared, 5=Approved, 6=Vendor, 7=Date, 8=Unit Price
-    QString receivedDate = (*targetPO)["receivedDate"].toString();
-        if (!poDepartment.isEmpty()) m_model->setDataAt(partRow, 3, poDepartment);
+        // 3=Department, 4=Prepared, 5=Approved, 6=Vendor, 7=Date, 8=Unit Price
+        if (!lineDepartment.isEmpty()) m_model->setDataAt(partRow, 3, lineDepartment);
         if (!poPreparedBy.isEmpty()) m_model->setDataAt(partRow, 4, poPreparedBy);
         if (!poApprovedBy.isEmpty()) m_model->setDataAt(partRow, 5, poApprovedBy);
-        if (!poVendor.isEmpty()) m_model->setDataAt(partRow, 6, poVendor);
+        if (!lineVendor.isEmpty()) m_model->setDataAt(partRow, 6, lineVendor);
         if (!receivedDate.isEmpty()) m_model->setDataAt(partRow, 7, receivedDate);
-        if (poUnitPrice > 0.0) m_model->setDataAt(partRow, 8, poUnitPrice);
+        if (lineUnitPrice > 0.0) m_model->setDataAt(partRow, 8, lineUnitPrice);
 
         qDebug() << "Stock updated:" << partName << currentStock << "->" << (currentStock + acceptedQty);
     } else {
@@ -1139,14 +1272,12 @@ QString ExcelHandler::receiveGoods(const QString &poNo,
         m_model->setDataAt(newRow, 0, partName);
         m_model->setDataAt(newRow, 1, partNo);
         m_model->setDataAt(newRow, 2, acceptedQty);
-
-        // Correct column placement for dashboard
-        m_model->setDataAt(newRow, 3, poDepartment);
+        m_model->setDataAt(newRow, 3, lineDepartment);
         m_model->setDataAt(newRow, 4, poPreparedBy);
         m_model->setDataAt(newRow, 5, poApprovedBy);
-        m_model->setDataAt(newRow, 6, poVendor);
-        m_model->setDataAt(newRow, 7, (*targetPO)["receivedDate"]);
-        if (poUnitPrice > 0.0) m_model->setDataAt(newRow, 8, poUnitPrice);
+        m_model->setDataAt(newRow, 6, lineVendor);
+        m_model->setDataAt(newRow, 7, receivedDate);
+        if (lineUnitPrice > 0.0) m_model->setDataAt(newRow, 8, lineUnitPrice);
 
         qDebug() << "New part added to stock:" << partName << "qty:" << acceptedQty;
     }
@@ -1158,26 +1289,41 @@ QString ExcelHandler::receiveGoods(const QString &poNo,
         logStockMovement(partName, partNo, "REJECTED", rejectedQty, grnNo, receiverName);
     }
 
-    // Auto-save to permanent file
+    // Persist the updated stock (database is the permanent store).
+    saveStockToDb();
     if (!m_permanentFile.isEmpty()) {
         saveToPermanent();
-    }
-
-    // Auto-upload to cloud after receiving goods (if enabled)
-    if (m_syncEnabled && !m_cloudFolder.isEmpty() && canEdit()) {
-        if (m_currentFile.isEmpty() && !m_permanentFile.isEmpty()) {
-            m_currentFile = m_permanentFile;
-        }
-        syncToCloud();
     }
 
     emit goodsReceived(grnNo, poNo);
     emit lowStockCountChanged();
 
-    qDebug() << "GRN" << grnNo << "created for PO" << poNo
+    qDebug() << "GRN" << grnNo << "for PO" << poNo << "item" << partName
              << "| Accepted:" << acceptedQty << "Rejected:" << rejectedQty;
 
     return grnNo;
+}
+
+QString ExcelHandler::receiveGoods(const QString &poNo,
+                                   int receivedQty, int acceptedQty,
+                                   int rejectedQty, const QString &remarks,
+                                   const QString &receivedBy)
+{
+    // Legacy entry point: receive against the first line that is still open.
+    int itemId = -1;
+    for (const auto &line : m_poItems) {
+        if (line["poNo"].toString() != poNo) continue;
+        if (itemId == -1) itemId = line["id"].toInt();
+        if (line["receivedQty"].toInt() < line["qty"].toInt()) {
+            itemId = line["id"].toInt();
+            break;
+        }
+    }
+    if (itemId == -1) {
+        emit errorOccurred("No items found for PO: " + poNo);
+        return "";
+    }
+    return receiveGoodsForItem(itemId, receivedQty, acceptedQty, rejectedQty, remarks, receivedBy);
 }
 
 QVariantList ExcelHandler::getGRNList()
@@ -1194,61 +1340,17 @@ QVariantList ExcelHandler::getGRNList()
 void ExcelHandler::loadStockMovements()
 {
     m_stockMovements.clear();
-    QString path = m_dataDir + "/stock_movements.xlsx";
-
-    if (!QFile::exists(path)) return;
-
-    QXlsx::Document xlsx(path);
-    if (!xlsx.load()) return;
-
-    QXlsx::Worksheet *sheet = xlsx.currentWorksheet();
-    if (!sheet) return;
-
-    QXlsx::CellRange range = sheet->dimension();
-
-    for (int row = 2; row <= range.lastRow(); ++row) {
-        QVariantMap mov;
-        mov["date"]     = sheet->cellAt(row, 1) ? sheet->cellAt(row, 1)->value().toString() : "";
-        mov["partName"] = sheet->cellAt(row, 2) ? sheet->cellAt(row, 2)->value().toString() : "";
-        mov["partNo"]   = sheet->cellAt(row, 3) ? sheet->cellAt(row, 3)->value().toString() : "";
-        mov["type"]     = sheet->cellAt(row, 4) ? sheet->cellAt(row, 4)->value().toString() : "";
-        mov["qty"]      = sheet->cellAt(row, 5) ? sheet->cellAt(row, 5)->value().toInt() : 0;
-        mov["reference"]= sheet->cellAt(row, 6) ? sheet->cellAt(row, 6)->value().toString() : "";
-        mov["doneBy"]   = sheet->cellAt(row, 7) ? sheet->cellAt(row, 7)->value().toString() : "";
-
-        if (!mov["date"].toString().trimmed().isEmpty()) {
-            m_stockMovements.append(mov);
-        }
-    }
-
-    qDebug() << "Loaded" << m_stockMovements.size() << "stock movements";         
+    if (!m_db) return;
+    m_stockMovements = dbRowsToApp(kMovementFields, m_db->selectAll("stock_movements", "id"));
+    qDebug() << "Loaded" << m_stockMovements.size() << "stock movements";
 }
 
 void ExcelHandler::saveStockMovements()
 {
-    QString path = m_dataDir + "/stock_movements.xlsx";
-    QXlsx::Document xlsx;
-
-    xlsx.write(1, 1, "Date");
-    xlsx.write(1, 2, "Part Name");
-    xlsx.write(1, 3, "Part No");
-    xlsx.write(1, 4, "Type");
-    xlsx.write(1, 5, "Qty");
-    xlsx.write(1, 6, "Reference");
-    xlsx.write(1, 7, "Done By");
-
-    for (int i = 0; i < m_stockMovements.size(); ++i) {
-        int row = i + 2;
-        xlsx.write(row, 1, m_stockMovements[i]["date"]);
-        xlsx.write(row, 2, m_stockMovements[i]["partName"]);
-        xlsx.write(row, 3, m_stockMovements[i]["partNo"]);
-        xlsx.write(row, 4, m_stockMovements[i]["type"]);
-        xlsx.write(row, 5, m_stockMovements[i]["qty"]);
-        xlsx.write(row, 6, m_stockMovements[i]["reference"]);
-        xlsx.write(row, 7, m_stockMovements[i]["doneBy"]);
-    }
-
-    xlsx.saveAs(path);
+    // The movement log is append-only; individual entries are inserted by
+    // logStockMovement(). A full rewrite is only used as a fallback.
+    if (!m_db) return;
+    m_db->replaceAll("stock_movements", appRowsToDb(kMovementFields, m_stockMovements));
 }
 
 bool ExcelHandler::logStockMovement(const QString &partName, const QString &partNo,
@@ -1265,7 +1367,7 @@ bool ExcelHandler::logStockMovement(const QString &partName, const QString &part
     mov["doneBy"]    = doneBy;
 
     m_stockMovements.append(mov);
-    saveStockMovements();
+    if (m_db) m_db->insert("stock_movements", appRowToDb(kMovementFields, mov));
     emit movementLogged(partName, movementType, qty);
 
     return true;
@@ -1298,122 +1400,113 @@ QVariantList ExcelHandler::getAllMovements()
 void ExcelHandler::loadIssueNotes()
 {
     m_issueNotes.clear();
-    QString path = m_dataDir + "/issue_notes.xlsx";
-
-    if (!QFile::exists(path)) return;
-
-    QXlsx::Document xlsx(path);
-    if (!xlsx.load()) return;
-
-    QXlsx::Worksheet *sheet = xlsx.currentWorksheet();
-    if (!sheet) return;
-
-    QXlsx::CellRange range = sheet->dimension();
-
-    for (int row = 2; row <= range.lastRow(); ++row) {
-        QVariantMap note;
-        note["issueNo"]    = sheet->cellAt(row, 1) ? sheet->cellAt(row, 1)->value().toString() : "";
-        note["date"]       = sheet->cellAt(row, 2) ? sheet->cellAt(row, 2)->value().toString() : "";
-        note["partName"]   = sheet->cellAt(row, 3) ? sheet->cellAt(row, 3)->value().toString() : "";
-        note["qty"]        = sheet->cellAt(row, 4) ? sheet->cellAt(row, 4)->value().toInt() : 0;
-        note["department"] = sheet->cellAt(row, 5) ? sheet->cellAt(row, 5)->value().toString() : "";
-        note["issuedBy"]   = sheet->cellAt(row, 6) ? sheet->cellAt(row, 6)->value().toString() : "";
-
-        if (!note["issueNo"].toString().trimmed().isEmpty()) {
-            m_issueNotes.append(note);
-        }
-    }
-
+    if (!m_db) return;
+    m_issueNotes = dbRowsToApp(kIssueFields, m_db->selectAll("issue_notes", "issue_no"));
     qDebug() << "Loaded" << m_issueNotes.size() << "issue notes";
 }
 
 void ExcelHandler::saveIssueNotes()
 {
-    QString path = m_dataDir + "/issue_notes.xlsx";
-    QXlsx::Document xlsx;
+    if (!m_db) return;
+    m_db->replaceAll("issue_notes", appRowsToDb(kIssueFields, m_issueNotes));
+}
 
-    xlsx.write(1, 1, "Issue No");
-    xlsx.write(1, 2, "Date");
-    xlsx.write(1, 3, "Part Name");
-    xlsx.write(1, 4, "Qty");
-    xlsx.write(1, 5, "Department");
-    xlsx.write(1, 6, "Issued By");
-
-    for (int i = 0; i < m_issueNotes.size(); ++i) {
-        int row = i + 2;
-        xlsx.write(row, 1, m_issueNotes[i]["issueNo"]);
-        xlsx.write(row, 2, m_issueNotes[i]["date"]);
-        xlsx.write(row, 3, m_issueNotes[i]["partName"]);
-        xlsx.write(row, 4, m_issueNotes[i]["qty"]);
-        xlsx.write(row, 5, m_issueNotes[i]["department"]);
-        xlsx.write(row, 6, m_issueNotes[i]["issuedBy"]);
+QString ExcelHandler::issueMultipleStock(const QVariantList &items,
+                                         const QString &department,
+                                         const QString &issuedBy)
+{
+    if (items.isEmpty()) {
+        emit errorOccurred("Add at least one part to issue");
+        return "";
+    }
+    if (department.trimmed().isEmpty()) {
+        emit errorOccurred("Department is required");
+        return "";
     }
 
-    xlsx.saveAs(path);
+    // Validate ALL lines before touching any stock (all-or-nothing).
+    struct IssueLine { int row; QString partName; int qty; };
+    QVector<IssueLine> lines;
+    for (const QVariant &v : items) {
+        const QVariantMap item = v.toMap();
+        const QString partName = item["partName"].toString().trimmed();
+        const int qty = item["qty"].toInt();
+
+        if (partName.isEmpty()) {
+            emit errorOccurred("Part name is required for every issue line");
+            return "";
+        }
+        if (qty <= 0) {
+            emit errorOccurred("Quantity must be greater than 0 for: " + partName);
+            return "";
+        }
+        int partRow = findPartRowByName(partName);
+        if (partRow == -1) {
+            emit errorOccurred("Part not found in stock: " + partName);
+            return "";
+        }
+        int currentStock = toStockInt(m_model->getData(partRow, 2));
+        // Account for earlier lines of this same request drawing on one part.
+        for (const IssueLine &prev : lines)
+            if (prev.row == partRow) currentStock -= prev.qty;
+        if (currentStock < qty) {
+            emit errorOccurred("Insufficient stock for " + partName +
+                               "! Available: " + QString::number(currentStock) +
+                               ", Requested: " + QString::number(qty));
+            return "";
+        }
+        lines.append({partRow, partName, qty});
+    }
+
+    // Generate one issue number (atomic, shared) for the whole note.
+    int issSeq = m_db ? m_db->nextCounter("iss") : m_nextIssueNumber++;
+    QString issueNo = "ISS-" + QString::number(issSeq).rightJustified(4, '0');
+    const QString stamp = QDateTime::currentDateTime().toString("yyyy-MM-dd hh:mm");
+
+    for (const IssueLine &line : lines) {
+        // Deduct stock
+        int currentStock = toStockInt(m_model->getData(line.row, 2));
+        m_model->setDataAt(line.row, 2, currentStock - line.qty);
+
+        // Record the issue line (append-only insert; one issue number can
+        // hold several lines in the v2 schema).
+        QVariantMap note;
+        note["issueNo"]    = issueNo;
+        note["date"]       = stamp;
+        note["partName"]   = line.partName;
+        note["qty"]        = line.qty;
+        note["department"] = department;
+        note["issuedBy"]   = issuedBy;
+        m_issueNotes.append(note);
+        if (m_db) m_db->insert("issue_notes", appRowToDb(kIssueFields, note));
+
+        // Log movement
+        QString partNo = m_model->getData(line.row, 1).toString();
+        logStockMovement(line.partName, partNo, "OUT", line.qty,
+                         issueNo + " -> " + department, issuedBy);
+
+        emit stockIssued(issueNo, line.partName, line.qty);
+        qDebug() << "Issued:" << line.partName << "x" << line.qty
+                 << "to" << department << "(" << issueNo << ")";
+    }
+
+    // Persist the updated stock (database is the permanent store).
+    saveStockToDb();
+    if (!m_permanentFile.isEmpty()) {
+        saveToPermanent();     
+    }
+    emit lowStockCountChanged();
+
+    return issueNo;
 }
 
 QString ExcelHandler::issueStock(const QString &partName, int qty,
                                  const QString &department, const QString &issuedBy)
 {
-    if (partName.trimmed().isEmpty()) {
-        emit errorOccurred("Part name is required");
-        return "";
-    }
-
-    if (qty <= 0) {
-        emit errorOccurred("Quantity must be greater than 0");
-        return "";
-    }
-
-    // Find part in stock
-    int partRow = findPartRowByName(partName);
-    if (partRow == -1) {
-        emit errorOccurred("Part not found in stock: " + partName);
-        return "";
-    }
-
-    // Check available stock
-    int currentStock = toStockInt(m_model->getData(partRow, 2));
-    if (currentStock < qty) {
-        emit errorOccurred("Insufficient stock! Available: " + QString::number(currentStock)
-                           + ", Requested: " + QString::number(qty));
-        return "";
-    }
-
-    // Generate issue number
-    QString issueNo = "ISS-" + QString::number(m_nextIssueNumber).rightJustified(4, '0');
-    m_nextIssueNumber++;
-    saveSupplyChainCounters();
-
-    // Deduct stock
-    m_model->setDataAt(partRow, 2, currentStock - qty);
-
-    // Create issue note
-    QVariantMap note;
-    note["issueNo"]    = issueNo;
-    note["date"]       = QDateTime::currentDateTime().toString("yyyy-MM-dd hh:mm");
-    note["partName"]   = partName;
-    note["qty"]        = qty;
-    note["department"] = department;
-    note["issuedBy"]   = issuedBy;
-
-    m_issueNotes.append(note);
-    saveIssueNotes();
-
-    // Log movement
-    QString partNo = m_model->getData(partRow, 1).toString();
-    logStockMovement(partName, partNo, "OUT", qty, issueNo + " -> " + department, issuedBy);
-
-    // Auto-save
-    if (!m_permanentFile.isEmpty()) {
-        saveToPermanent();
-    }
-
-    emit stockIssued(issueNo, partName, qty);
-    emit lowStockCountChanged();
-
-    qDebug() << "Issued:" << partName << "x" << qty << "to" << department << "(" << issueNo << ")";
-    return issueNo;
+    QVariantMap item;
+    item["partName"] = partName;
+    item["qty"] = qty;
+    return issueMultipleStock({item}, department, issuedBy);
 }
 
 QVariantList ExcelHandler::getIssueNotes()
@@ -1427,21 +1520,103 @@ QVariantList ExcelHandler::getIssueNotes()
 
 // ==================== LOW STOCK ALERTS ====================
 
-int ExcelHandler::lowStockCount()
-{
-    // Low stock columns are removed from the main dashboard layout.
-    return 0;
-}
-
 QVariantList ExcelHandler::getLowStockItems()
 {
-    return QVariantList();
+    QVariantList list;
+
+    // Quantity already on order per part (open POs only) so the same
+    // shortage is not ordered twice.
+    QSet<QString> openPOs;
+    for (const auto &po : m_purchaseOrders) {
+        const QString st = po["status"].toString().toLower();
+        if (st == "draft" || st == "sent" || st == "partially received")
+            openPOs.insert(po["poNo"].toString());
+    }
+    QHash<QString, int> onOrder;
+    for (const auto &line : m_poItems) {
+        if (!openPOs.contains(line["poNo"].toString())) continue;
+        int remaining = line["qty"].toInt() - line["receivedQty"].toInt();
+        if (remaining > 0)
+            onOrder[line["partName"].toString().trimmed().toLower()] += remaining;
+    }
+
+    // An item is low when current stock plus open orders cannot cover the
+    // required quantity defined in the Item Master.
+    for (const auto &item : m_itemMaster) {
+        const int required = item["requiredQty"].toInt();
+        if (required <= 0) continue;
+        const QString partName = item["partName"].toString().trimmed();
+        if (partName.isEmpty()) continue;
+
+        int stock = 0;
+        int row = findPartRowByName(partName);
+        if (row != -1) stock = toStockInt(m_model->getData(row, 2));
+
+        const int ordered = onOrder.value(partName.toLower(), 0);
+        if (stock + ordered >= required) continue;
+
+        QVariantMap e;
+        e["partName"]    = partName;
+        e["partNo"]      = item["partNo"];
+        e["stock"]       = stock;
+        e["requiredQty"] = required;
+        e["onOrder"]     = ordered;
+        e["shortage"]    = required - stock - ordered;
+        e["vendor"]      = item["vendor"];
+        e["unitPrice"]   = item["unitPrice"].toDouble();
+        list.append(e);
+    }
+    return list;
+}
+
+int ExcelHandler::lowStockCount()
+{
+    return getLowStockItems().size();
 }
 
 bool ExcelHandler::autoGeneratePOForLowStock()
 {
-    emit errorOccurred("Low stock auto-generation is disabled for current column layout");
-    return false;
+    const QVariantList low = getLowStockItems();
+    if (low.isEmpty()) {
+        emit errorOccurred("No low stock items to order");
+        return false;
+    }
+
+    // One multi-item PO covering every shortage; each line uses the part's
+    // preferred vendor from the Item Master.
+    QVariantList items;
+    QStringList skipped;
+    for (const QVariant &v : low) {
+        const QVariantMap e = v.toMap();
+        if (e["vendor"].toString().trimmed().isEmpty()) {
+            skipped << e["partName"].toString();
+            continue;
+        }
+        QVariantMap line;
+        line["partName"]  = e["partName"];
+        line["partNo"]    = e["partNo"];
+        line["vendor"]    = e["vendor"];
+        line["qty"]       = e["shortage"];
+        line["unitPrice"] = e["unitPrice"];
+        items.append(line);
+    }
+
+    if (items.isEmpty()) {
+        emit errorOccurred("Low stock items have no preferred vendor in Item Master: " +
+                           skipped.join(", "));
+        return false;
+    }
+
+    const QString expected = QDateTime::currentDateTime().addDays(7).toString("yyyy-MM-dd");
+    const QString poNo = createPurchaseOrderItems(items, expected, m_currentUser);
+    if (poNo.isEmpty()) return false;
+
+    if (!skipped.isEmpty())
+        emit errorOccurred("PO " + poNo + " created. Skipped (no vendor in Item Master): " +
+                           skipped.join(", "));
+
+    qDebug() << "Auto-generated" << poNo << "for" << items.size() << "low stock items";
+    return true;
 }
 
 // ==================== Helper: Find Part Row ====================
@@ -2425,13 +2600,13 @@ void ExcelHandler::onModelDataChanged()
 
 void ExcelHandler::autoSavePermanent()
 {
-    if (m_permanentFile.isEmpty()) return;
-    saveToPermanent();
+    // The database is the permanent store now.
+    saveStockToDb();
+    setUnsavedChanges(false);
 
-    if (m_syncEnabled && !m_cloudFolder.isEmpty() && canEdit()) {
-        if (m_currentFile.isEmpty()) m_currentFile = m_permanentFile;
-        syncToCloud();
-    }
+    // Legacy: also mirror to a permanent xlsx if one was configured.
+    if (!m_permanentFile.isEmpty())
+        saveToPermanent();
 }
 
 void ExcelHandler::autoSyncFromCloud()
@@ -2467,7 +2642,8 @@ void ExcelHandler::setUnsavedChanges(bool changed)
 
 void ExcelHandler::scheduleAutoSave()
 {
-    if (m_permanentFile.isEmpty()) return;
+    // Debounced autosave into the shared database (and, if configured, the
+    // legacy permanent xlsx file).
     m_autoSaveTimer.start(500);
 }
 
@@ -2628,140 +2804,117 @@ bool ExcelHandler::unlockFile(const QString &filePath)
     return false;
 }
 
+// ---------------------------------------------------------------------------
+// Dropbox / folder-based cloud sync is deprecated. All supply-chain data now
+// lives in the shared SQL database, which handles multi-user concurrency
+// natively, so these methods are intentionally no-ops kept only for binary /
+// QML compatibility.
+// ---------------------------------------------------------------------------
 bool ExcelHandler::syncToCloud()
 {
-    if (m_cloudFolder.isEmpty()) {
-        emit errorOccurred("No cloud folder configured");
-        return false;
-    }
-    if (m_currentFile.isEmpty()) {
-        emit errorOccurred("No file loaded");
-        return false;
-    }
-    if (!canEdit()) {
-        emit errorOccurred("No permission to upload");
-        return false;
-    }
-
-    updateSyncStatus("syncing");
-    QString cloudFilePath = getCloudFilePath();
-
-    if (QFileInfo(m_currentFile).canonicalFilePath() == QFileInfo(cloudFilePath).canonicalFilePath()) {
-        if (saveExcel(m_currentFile)) {
-            m_lastSyncTime = QDateTime::currentDateTime().toString("yyyy-MM-dd hh:mm:ss");
-            saveCloudSettings();
-            emit lastSyncTimeChanged();
-            updateSyncStatus("synced");
-            emit syncCompleted(true);
-            return true;
-        }
-        updateSyncStatus("offline");
-        return false;
-    }
-
-    if (isFileLocked(cloudFilePath)) {
-        emit errorOccurred("File locked by another user");
-        updateSyncStatus("conflict");
-        return false;
-    }
-
-    lockFile(cloudFilePath);
-
-    if (!saveExcel(m_currentFile)) {
-        unlockFile(cloudFilePath);
-        updateSyncStatus("synced");
-        return false;
-    }
-
-    if (QFile::exists(cloudFilePath)) QFile::remove(cloudFilePath);
-
-    if (QFile::copy(m_currentFile, cloudFilePath)) {
-        m_lastSyncTime = QDateTime::currentDateTime().toString("yyyy-MM-dd hh:mm:ss");
-        saveCloudSettings();
-        emit lastSyncTimeChanged();
-        updateSyncStatus("synced");
-        emit syncCompleted(true);
-        QTimer::singleShot(1000, [this, cloudFilePath]() { unlockFile(cloudFilePath); });
-        return true;
-    }
-
-    unlockFile(cloudFilePath);
-    emit errorOccurred("Failed to upload to cloud");
-    updateSyncStatus("offline");
+    updateSyncStatus("db");
     return false;
 }
 
 bool ExcelHandler::syncFromCloud()
 {
-    if (m_cloudFolder.isEmpty()) {
-        emit errorOccurred("No cloud folder configured");
-        return false;
-    }
-
-    updateSyncStatus("syncing");
-    QString cloudFilePath = getCloudFilePath();
-
-    if (!QFile::exists(cloudFilePath)) {
-        emit errorOccurred("No file found in cloud");
-        updateSyncStatus("offline");
-        return false;
-    }
-
-    if (isFileLocked(cloudFilePath)) {
-        emit errorOccurred("File locked by another user");
-        updateSyncStatus("conflict");
-        return false;
-    }
-
-    QString originalFile = m_currentFile;
-
-    if (loadExcel(cloudFilePath)) {
-        if (!m_permanentFile.isEmpty()) {
-            QFile::remove(m_permanentFile);
-            if (QFile::copy(cloudFilePath, m_permanentFile)) {
-                m_currentFile = m_permanentFile;
-            } else {
-                m_currentFile = cloudFilePath;
-            }
-        } else if (!originalFile.isEmpty()) {
-            QFile::remove(originalFile);
-            if (QFile::copy(cloudFilePath, originalFile)) {
-                m_currentFile = originalFile;
-            } else {
-                m_currentFile = cloudFilePath;
-            }
-        } else {
-            m_currentFile = cloudFilePath;
-        }
-
-        m_lastSyncTime = QDateTime::currentDateTime().toString("yyyy-MM-dd hh:mm:ss");
-        saveCloudSettings();
-        emit lastSyncTimeChanged();
-        emit currentFileChanged();
-        updateSyncStatus("synced");
-        emit syncCompleted(true);
-        return true;
-    }
-
-    updateSyncStatus("offline");
+    updateSyncStatus("db");
     return false;
 }
 
 bool ExcelHandler::checkForUpdates()
 {
-    QString localFile = !m_currentFile.isEmpty() ? m_currentFile : m_permanentFile;
-    if (m_cloudFolder.isEmpty() || localFile.isEmpty()) return false;
-
-    QString cloudFilePath = getCloudFilePath();
-    if (!QFile::exists(cloudFilePath)) return false;
-
-    QFileInfo localFileInfo(localFile);
-    QFileInfo cloudFile(cloudFilePath);
-
-    if (cloudFile.lastModified() > localFileInfo.lastModified()) {
-        emit conflictDetected("Cloud file has been updated");
-        return true;
-    }
-
     return false;
+}
+
+// ==================== AUTHENTICATION ====================
+
+QString ExcelHandler::login(const QString &username, const QString &password)
+{
+    if (!m_db) return QString();
+    const QString role = m_db->authenticate(username, password);
+    if (!role.isEmpty()) {
+        setCurrentUser(username);
+        setUserRole(role);
+        qInfo() << "Login successful for" << username << "as" << role;
+    }
+    return role;
+}
+
+// ==================== DATABASE CONNECTION SETTINGS ====================
+
+QVariantMap ExcelHandler::getDatabaseSettings() const
+{
+    return m_db ? m_db->connectionSettings() : QVariantMap();
+}
+
+bool ExcelHandler::configureDatabase(const QString &driver,
+                                     const QString &host, int port,
+                                     const QString &name,
+                                     const QString &user, const QString &password)
+{
+    if (!m_db) return false;
+
+    const bool ok = m_db->configureConnection(driver, host, port, name, user, password);
+    if (ok) {
+        // Reload every cache (including the stock grid) from the new database.
+        refreshFromDatabase();
+    }
+    return ok;
+}
+
+QString ExcelHandler::databaseStatus() const
+{
+    if (!m_db) return "Not initialised";
+    return (m_db->isConnected() ? "Connected: " : "Disconnected: ") + m_db->backendName();
+}
+
+bool ExcelHandler::isDatabaseConnected() const
+{
+    return m_db && m_db->isConnected();
+}
+
+bool ExcelHandler::isDatabaseServerBackend() const
+{
+    return m_db && m_db->isServerBackend();
+}
+
+QString ExcelHandler::databaseLastError() const
+{
+    return m_db ? m_db->lastError() : QString("Database not initialised");
+}
+
+// ==================== LAN SERVER PROVISIONING ====================
+
+void ExcelHandler::setupThisComputerAsServer()
+{
+    if (m_serverSetup) m_serverSetup->provisionAsServer();
+}
+
+bool ExcelHandler::isServerProvisioned() const
+{
+    return m_serverSetup && m_serverSetup->isServerProvisioned();
+}
+
+QString ExcelHandler::serverLanAddressHint() const
+{
+    return m_serverSetup ? m_serverSetup->lanAddressHint() : QString();
+}
+
+void ExcelHandler::refreshFromDatabase()
+{
+    if (!m_db || !m_db->isConnected()) return;
+
+    loadVendors();
+    loadItemMaster();
+    loadPurchaseOrders();
+    loadStockMovements();
+    loadIssueNotes();
+    loadGRNRecords();
+    loadStockFromDb();
+
+    emit vendorListChanged();
+    emit itemMasterListChanged();
+    emit pendingPOCountChanged();
+    emit lowStockCountChanged();
 }
