@@ -137,10 +137,26 @@ public:
     // True only when actually connected to a shared server (PostgreSQL), not
     // the local SQLite fallback. Lets the UI detect a silent fallback.
     Q_INVOKABLE bool isDatabaseServerBackend() const;
+    // Copies this computer's local data into the shared server it is connected
+    // to, for the one-time switch from single-machine storage to a server.
+    Q_INVOKABLE QVariantMap copyLocalDataToServer();
     // Human-readable reason the last connection attempt failed (empty if none).
     Q_INVOKABLE QString databaseLastError() const;
     // Reloads all supply-chain caches from the database (pull latest in multi-user).
+    // ---- Stock segregation for the main window ----
+    // Per-department rollup: {department, parts, qty, value, share, colorIndex}
+    // sorted by quantity. colorIndex is derived from the department name, not
+    // from its rank, so a department keeps its colour as the mix changes.
+    Q_INVOKABLE QVariantList departmentStockSummary() const;
+    // 1-based stock row numbers for one department; empty department = all rows.
+    Q_INVOKABLE QVariantList stockRowsForDepartment(const QString &department) const;
+    // Headline totals across all stock: {parts, units, value, departments}
+    Q_INVOKABLE QVariantMap stockTotals() const;
+
     Q_INVOKABLE void refreshFromDatabase();
+    // Seconds between checks for other machines' edits. 0 stops the polling.
+    Q_INVOKABLE void setLiveSyncInterval(int seconds);
+    Q_INVOKABLE int liveSyncInterval() const;
 
     // ---- LAN server provisioning ----
     // Turns this computer into the shared PostgreSQL server for every other
@@ -190,8 +206,11 @@ public:
     // ---- Purchase Order Management ----
     // One PO holding several line items; each item carries its own vendor.
     // items: list of maps {partName, partNo, vendor, department, qty, unitPrice}
+    // expectedDate/expectedEndDate bound the period the goods are needed in.
+    // An empty end date means a single expected day rather than a range.
     Q_INVOKABLE QString createPurchaseOrderItems(const QVariantList &items,
                                                  const QString &expectedDate,
+                                                 const QString &expectedEndDate,
                                                  const QString &preparedBy = "");
     Q_INVOKABLE QVariantList getPOItems(const QString &poNo);
 
@@ -202,9 +221,14 @@ public:
                                             int qty, double unitPrice,
                                             const QString &expectedDate,
                                             const QString &department = "",
-                                            const QString &preparedBy = "");
+                                            const QString &preparedBy = "",
+                                            const QString &expectedEndDate = "");
     Q_INVOKABLE bool sendPOForApproval(const QString &poNo, const QString &approvedBy);
     Q_INVOKABLE QVariantList getPOList(const QString &statusFilter = "");
+    // poNo -> one lowercase blob of everything the PO list can be searched by,
+    // including the line items the aggregated "+N more" row label hides. Built
+    // in a single pass so the search box stays cheap as the history grows.
+    Q_INVOKABLE QVariantMap getPOSearchIndex() const;
     Q_INVOKABLE bool updatePOStatus(const QString &poNo, const QString &newStatus);
     Q_INVOKABLE bool updatePurchaseOrder(const QString &poNo, const QVariantMap &poDetails);
     Q_INVOKABLE QVariantMap getPOByNumber(const QString &poNo);
@@ -274,6 +298,8 @@ signals:
     void fileSaved(const QString &fileName);
     void fileMerged(const QString &fileName, int rowsAdded, int rowsUpdated);
     void searchResultFound(int row);
+    // Another machine changed the shared data and it has just been reloaded.
+    void sharedDataChanged();
 
     // Cloud signals
     void cloudFolderChanged();
@@ -339,6 +365,7 @@ private:
     QString m_dataDir;
     QTimer m_autoSaveTimer;
     QTimer m_cloudPollTimer;
+    QTimer m_liveSyncTimer;   // polls the shared DB for other machines' edits
 
     // Existing helpers
     void setUnsavedChanges(bool changed);

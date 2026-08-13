@@ -38,6 +38,18 @@ QString money(double v)
     return in.toString(v, 'f', 2);
 }
 
+// The expected date is a period. Renders as "from - to", collapsing to a
+// single date when only one end is known and to "-" when neither is.
+QString expectedPeriod(const QVariantMap &po)
+{
+    const QString from = po.value("expectedDate").toString().trimmed();
+    const QString to   = po.value("expectedEndDate").toString().trimmed();
+    if (from.isEmpty() && to.isEmpty()) return QStringLiteral("-");
+    if (to.isEmpty() || from == to)     return esc(from.isEmpty() ? to : from);
+    if (from.isEmpty())                 return QStringLiteral("up to ") + esc(to);
+    return esc(from) + QStringLiteral(" &ndash; ") + esc(to);
+}
+
 // Joins the non-empty parts of an address into <br>-separated lines so a
 // missing field never leaves a blank gap in the block.
 QString lines(const QStringList &parts)
@@ -45,7 +57,7 @@ QString lines(const QStringList &parts)
     QStringList kept;
     for (const QString &p : parts) {
         const QString t = p.trimmed();
-        if (!t.isEmpty()) kept << t.toHtmlEscaped();
+        if (!t.isEmpty()) kept << t.toHtmlEscaped();           
     }
     return kept.join("<br/>");
 }
@@ -191,7 +203,7 @@ QString buildHtml(const QVariantMap &company,
        style="margin-top:12px; border-color:%9; border-collapse:collapse">
   <tr bgcolor="%1">
     <td width="25%" align="center"><span style="color:#ffffff; font-weight:bold; font-size:8pt">REQUISITIONER</span></td>
-    <td width="25%" align="center"><span style="color:#ffffff; font-weight:bold; font-size:8pt">EXPECTED DATE</span></td>
+    <td width="25%" align="center"><span style="color:#ffffff; font-weight:bold; font-size:8pt">REQUIRED PERIOD</span></td>
     <td width="25%" align="center"><span style="color:#ffffff; font-weight:bold; font-size:8pt">STATUS</span></td>
     <td width="25%" align="center"><span style="color:#ffffff; font-weight:bold; font-size:8pt">APPROVED BY</span></td>
   </tr>
@@ -257,8 +269,7 @@ If you have any questions about this purchase order, please contact<br/>%18
              esc(po.value("date")), esc(po.value("poNo")),
              vendorBlock, shipToBlock, kRule)
         .arg(esc(po.value("preparedBy")),
-             po.value("expectedDate").toString().trimmed().isEmpty()
-                 ? QStringLiteral("-") : esc(po.value("expectedDate")),
+             expectedPeriod(po),
              esc(po.value("status")),
              po.value("approvedBy").toString().trimmed().isEmpty()
                  ? QStringLiteral("-") : esc(po.value("approvedBy")),

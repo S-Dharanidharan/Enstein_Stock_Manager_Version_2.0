@@ -1,4 +1,8 @@
 #include "excelhandler.h"
+
+#include <QSet>
+#include <QMap>
+#include <algorithm>
 #include "podocument.h"
 #include "dbmanager.h"
 #include "serversetup.h"
@@ -66,6 +70,7 @@ const QVector<DbField> kPoFields = {
     {"unit_price",    "unitPrice",    'd'},
     {"total_amount",  "totalAmount",  'd'},
     {"expected_date", "expectedDate", 's'},
+    {"expected_end_date", "expectedEndDate", 's'},
     {"status",        "status",       's'},
     {"received_qty",  "receivedQty",  'i'},
     {"prepared_by",   "preparedBy",   's'},
@@ -297,6 +302,22 @@ ExcelHandler::ExcelHandler(QObject *parent)
     connect(&m_autoSaveTimer, &QTimer::timeout,
             this, &ExcelHandler::autoSavePermanent);
 
+    // Watches the shared database so an edit made on any other machine appears
+    // here on its own. Only meaningful against a server; a local file has no
+    // other writers, so the timer stays idle in that case.
+    m_liveSyncTimer.setInterval(4000);
+    m_liveSyncTimer.setSingleShot(false);
+    connect(&m_liveSyncTimer, &QTimer::timeout, this, [this]() {
+        if (!m_db || !m_db->isConnected() || !m_db->isServerBackend()) return;
+        // A grid edit is still queued for saving; reloading now would replace it
+        // with the server's older copy. Let the save land and pick this up on
+        // the next tick instead.
+        if (m_autoSaveTimer.isActive()) return;
+        if (!m_db->hasRemoteChanges()) return;
+        refreshFromDatabase();          // also re-marks the version
+        emit sharedDataChanged();
+    });
+
     m_cloudPollTimer.setInterval(10000);
     m_cloudPollTimer.setSingleShot(false);
     connect(&m_cloudPollTimer, &QTimer::timeout,
@@ -336,6 +357,12 @@ ExcelHandler::ExcelHandler(QObject *parent)
             });
 
     // Load supply chain data from the database
+    // Start watching for other machines' edits when this is a shared server.
+    if (m_db->isConnected() && m_db->isServerBackend()) {
+        m_db->syncVersionMark();
+        m_liveSyncTimer.start();
+    }
+
     loadVendors();
     loadItemMaster();
     loadPurchaseOrders();
@@ -772,6 +799,20 @@ void ExcelHandler::saveStockToDb()
 {
     if (!m_db || !m_db->isConnected()) return;
 
+    // The stock grid is stored as a whole table, so writing it out replaces
+    // every row. If another machine has written since our last reload, our copy
+    // is stale and a blind write would wipe their rows. Refuse, reload, and say
+    // so - losing one cell entry with a message beats silently discarding
+    // someone else's work.
+    if (m_db->isServerBackend() && m_db->hasRemoteChanges()) {
+        emit errorOccurred("Someone else changed the stock while you were editing. "
+                           "Your last stock edit was not saved - the grid has been "
+                           "refreshed with their version, please re-enter it.");
+        refreshFromDatabase();
+        emit sharedDataChanged();
+        return;
+    }
+
     QVector<QVariantMap> rows;
     const int rowCount = m_model->rowCount();
     for (int r = 1; r < rowCount; ++r) {           // skip header row
@@ -1042,6 +1083,7 @@ QString ExcelHandler::getNextPONumber()
 
 QString ExcelHandler::createPurchaseOrderItems(const QVariantList &items,
                                                const QString &expectedDate,
+                                               const QString &expectedEndDate,
                                                const QString &preparedBy)
 {
     if (items.isEmpty()) {
@@ -1077,6 +1119,7 @@ QString ExcelHandler::createPurchaseOrderItems(const QVariantList &items,
     po["unitPrice"]    = 0.0;
     po["totalAmount"]  = 0.0;
     po["expectedDate"] = expectedDate;
+    po["expectedEndDate"] = expectedEndDate;
     po["status"]       = "Draft";
     po["receivedQty"]  = 0;
     po["preparedBy"]   = resolvedPreparedBy;
@@ -1126,7 +1169,8 @@ QString ExcelHandler::createPurchaseOrder(const QString &vendor,
                                           int qty, double unitPrice,
                                           const QString &expectedDate,
                                           const QString &department,
-                                          const QString &preparedBy)
+                                          const QString &preparedBy,
+                                          const QString &expectedEndDate)
 {
     QVariantMap line;
     line["partName"]   = partName;
@@ -1135,7 +1179,7 @@ QString ExcelHandler::createPurchaseOrder(const QString &vendor,
     line["department"] = department;
     line["qty"]        = qty;
     line["unitPrice"]  = unitPrice;
-    return createPurchaseOrderItems({line}, expectedDate, preparedBy);
+    return createPurchaseOrderItems({line}, expectedDate, expectedEndDate, preparedBy);
 }
 
 bool ExcelHandler::sendPOForApproval(const QString &poNo, const QString &approvedBy)
@@ -1178,6 +1222,38 @@ QVariantList ExcelHandler::getPOList(const QString &statusFilter)
     return list;
 }
 
+QVariantMap ExcelHandler::getPOSearchIndex() const
+{
+    // Group the line items by PO first so each order is visited once.
+    QHash<QString, QStringList> lineText;
+    for (const auto &line : m_poItems) {
+        lineText[line["poNo"].toString()]
+                << line["partName"].toString() << line["partNo"].toString()
+                << line["vendor"].toString() << line["department"].toString();
+    }
+
+    QVariantMap index;
+    for (const auto &po : m_purchaseOrders) {
+        const QString poNo = po["poNo"].toString();
+        QStringList fields{poNo,
+                           po["vendor"].toString(),
+                           po["partName"].toString(),
+                           po["partNo"].toString(),
+                           po["department"].toString(),
+                           po["date"].toString(),
+                           po["expectedDate"].toString(),
+                           po["expectedEndDate"].toString(),
+                           po["status"].toString(),
+                           po["preparedBy"].toString(),
+                           po["approvedBy"].toString(),
+                           po["receivedBy"].toString(),
+                           po["receivedDate"].toString()};
+        fields += lineText.value(poNo);
+        index[poNo] = fields.join(QLatin1Char(' ')).toLower();
+    }
+    return index;
+}
+
 bool ExcelHandler::updatePOStatus(const QString &poNo, const QString &newStatus)
 {
     for (auto &po : m_purchaseOrders) {
@@ -1209,6 +1285,7 @@ bool ExcelHandler::updatePurchaseOrder(const QString &poNo, const QVariantMap &p
         QString partNo = poDetails.value("partNo", po["partNo"]).toString().trimmed();
         QString department = poDetails.value("department", po["department"]).toString().trimmed();
         QString expectedDate = poDetails.value("expectedDate", po["expectedDate"]).toString().trimmed();
+        QString expectedEndDate = poDetails.value("expectedEndDate", po["expectedEndDate"]).toString().trimmed();
         QString preparedBy = poDetails.value("preparedBy", po["preparedBy"]).toString().trimmed();
         int qty = poDetails.value("qty", po["qty"]).toInt();
         double unitPrice = poDetails.value("unitPrice", po["unitPrice"]).toDouble();
@@ -1223,6 +1300,7 @@ bool ExcelHandler::updatePurchaseOrder(const QString &poNo, const QVariantMap &p
         }
 
         po["expectedDate"] = expectedDate;
+        po["expectedEndDate"] = expectedEndDate;
         po["preparedBy"] = preparedBy;
 
         // Sync the line item when this PO has exactly one (the edit dialog
@@ -2658,13 +2736,14 @@ bool ExcelHandler::exportReport(const QString &fromDate, const QString &toDate, 
     xlsx.write(1, 7, "Qty");
     xlsx.write(1, 8, "Unit Price");
     xlsx.write(1, 9, "Total Amount");
-    xlsx.write(1, 10, "Expected Date");
-    xlsx.write(1, 11, "Status");
-    xlsx.write(1, 12, "Received Qty");
-    xlsx.write(1, 13, "Prepared By");
-    xlsx.write(1, 14, "Approved By");
-    xlsx.write(1, 15, "Received By");
-    xlsx.write(1, 16, "Received Date");
+    xlsx.write(1, 10, "Expected From");
+    xlsx.write(1, 11, "Expected To");
+    xlsx.write(1, 12, "Status");
+    xlsx.write(1, 13, "Received Qty");
+    xlsx.write(1, 14, "Prepared By");
+    xlsx.write(1, 15, "Approved By");
+    xlsx.write(1, 16, "Received By");
+    xlsx.write(1, 17, "Received Date");
 
     row = 2;
     for (const auto &po : m_purchaseOrders) {
@@ -2680,12 +2759,13 @@ bool ExcelHandler::exportReport(const QString &fromDate, const QString &toDate, 
         xlsx.write(row, 8, po.value("unitPrice"));
         xlsx.write(row, 9, po.value("totalAmount"));
         xlsx.write(row, 10, po.value("expectedDate"));
-        xlsx.write(row, 11, po.value("status"));
-        xlsx.write(row, 12, po.value("receivedQty"));
-        xlsx.write(row, 13, po.value("preparedBy"));
-        xlsx.write(row, 14, po.value("approvedBy"));
-        xlsx.write(row, 15, po.value("receivedBy"));
-        xlsx.write(row, 16, po.value("receivedDate"));
+        xlsx.write(row, 11, po.value("expectedEndDate"));
+        xlsx.write(row, 12, po.value("status"));
+        xlsx.write(row, 13, po.value("receivedQty"));
+        xlsx.write(row, 14, po.value("preparedBy"));
+        xlsx.write(row, 15, po.value("approvedBy"));
+        xlsx.write(row, 16, po.value("receivedBy"));
+        xlsx.write(row, 17, po.value("receivedDate"));
         row++;
     }
 
@@ -2992,6 +3072,23 @@ QVariantMap ExcelHandler::getDatabaseSettings() const
     return m_db ? m_db->connectionSettings() : QVariantMap();
 }
 
+QVariantMap ExcelHandler::copyLocalDataToServer()
+{
+    QVariantMap result;
+    if (!m_db) {
+        result["success"] = false;
+        result["message"] = "No database connection";
+        return result;
+    }
+
+    result = m_db->migrateLocalDataToServer();
+    if (result.value("success").toBool()) {
+        // Pick the newly shared rows up straight away.
+        refreshFromDatabase();
+    }
+    return result;
+}
+
 bool ExcelHandler::configureDatabase(const QString &driver,
                                      const QString &host, int port,
                                      const QString &name,
@@ -3045,9 +3142,146 @@ QString ExcelHandler::serverLanAddressHint() const
     return m_serverSetup ? m_serverSetup->lanAddressHint() : QString();
 }
 
+void ExcelHandler::setLiveSyncInterval(int seconds)
+{
+    if (seconds <= 0) {
+        m_liveSyncTimer.stop();
+        return;
+    }
+    m_liveSyncTimer.setInterval(seconds * 1000);
+    if (m_db && m_db->isConnected() && m_db->isServerBackend())
+        m_liveSyncTimer.start();
+}
+
+int ExcelHandler::liveSyncInterval() const
+{
+    return m_liveSyncTimer.isActive() ? m_liveSyncTimer.interval() / 1000 : 0;
+}
+
+namespace {
+// Column layout of the stock grid, as shown in the main window headers.
+enum StockColumn { ColPartName = 0, ColPartNo = 1, ColQty = 2, ColDepartment = 3,
+                   ColVendor = 6, ColUnitPrice = 8 };
+
+// Rows with no department still have to go somewhere the user can find them.
+const char *kUnassignedDept = "Unassigned";
+
+QString normalisedDept(const QVariant &raw)
+{
+    const QString name = raw.toString().trimmed();
+    return name.isEmpty() ? QString::fromLatin1(kUnassignedDept) : name;
+}
+}
+
+QVariantList ExcelHandler::departmentStockSummary() const
+{
+    // Keyed by the folded name so "electronics" and "Electronics" are one
+    // department; the first spelling seen is what gets displayed.
+    struct Agg { QString display; int parts = 0; double qty = 0; double value = 0; };
+    QMap<QString, Agg> byDept;          // QMap keeps the key order stable
+
+    const int rows = m_model ? m_model->rowCount() : 0;
+    double totalQty = 0;
+    for (int r = 1; r < rows; ++r) {    // row 0 holds the headers
+        const QString partName = m_model->getData(r, ColPartName).toString().trimmed();
+        const QString partNo = m_model->getData(r, ColPartNo).toString().trimmed();
+        if (partName.isEmpty() && partNo.isEmpty()) continue;   // blank filler row
+
+        const double qty = m_model->getData(r, ColQty).toDouble();
+        const double price = m_model->getData(r, ColUnitPrice).toDouble();
+
+        const QString dept = normalisedDept(m_model->getData(r, ColDepartment));
+        Agg &a = byDept[dept.toCaseFolded()];
+        if (a.display.isEmpty()) a.display = dept;
+        a.parts += 1;
+        a.qty += qty;
+        a.value += qty * price;
+        totalQty += qty;
+    }
+
+    // Colour slot follows the department's position in the sorted name list, so
+    // it does not move when quantities change or a department empties out.
+    const QStringList keys = byDept.keys();
+    QVariantList out;
+    for (auto it = byDept.constBegin(); it != byDept.constEnd(); ++it) {
+        QVariantMap m;
+        m["department"] = it.value().display;
+        m["parts"] = it.value().parts;
+        m["qty"] = it.value().qty;
+        m["value"] = it.value().value;
+        m["share"] = totalQty > 0 ? (it.value().qty / totalQty) : 0.0;
+        m["colorIndex"] = keys.indexOf(it.key());
+        out.append(m);
+    }
+
+    // Biggest holding first - that is the order the reader wants to scan.
+    std::sort(out.begin(), out.end(), [](const QVariant &a, const QVariant &b) {
+        const QVariantMap ma = a.toMap(), mb = b.toMap();
+        if (ma["qty"].toDouble() != mb["qty"].toDouble())
+            return ma["qty"].toDouble() > mb["qty"].toDouble();
+        return ma["department"].toString().localeAwareCompare(mb["department"].toString()) < 0;
+    });
+    return out;
+}
+
+QVariantList ExcelHandler::stockRowsForDepartment(const QString &department) const
+{
+    QVariantList out;
+    const int rows = m_model ? m_model->rowCount() : 0;
+    const QString wanted = department.trimmed();
+
+    for (int r = 1; r < rows; ++r) {
+        if (!wanted.isEmpty() &&
+            normalisedDept(m_model->getData(r, ColDepartment)).compare(
+                wanted, Qt::CaseInsensitive) != 0) {
+            continue;
+        }
+        out.append(r);
+    }
+    return out;
+}
+
+QVariantMap ExcelHandler::stockTotals() const
+{
+    QVariantMap out;
+    int parts = 0;
+    double units = 0, value = 0;
+    QSet<QString> depts;
+
+    const int rows = m_model ? m_model->rowCount() : 0;
+    for (int r = 1; r < rows; ++r) {
+        const QString partName = m_model->getData(r, ColPartName).toString().trimmed();
+        const QString partNo = m_model->getData(r, ColPartNo).toString().trimmed();
+        if (partName.isEmpty() && partNo.isEmpty()) continue;
+
+        const double qty = m_model->getData(r, ColQty).toDouble();
+        parts += 1;
+        units += qty;
+        value += qty * m_model->getData(r, ColUnitPrice).toDouble();
+        depts.insert(normalisedDept(m_model->getData(r, ColDepartment)).toCaseFolded());
+    }
+
+    out["parts"] = parts;
+    out["units"] = units;
+    out["value"] = value;
+    out["departments"] = depts.size();
+    return out;
+}
+
 void ExcelHandler::refreshFromDatabase()
 {
     if (!m_db || !m_db->isConnected()) return;
+
+    // Everything below reflects the database as of now, so this is the point the
+    // "have others changed anything?" mark belongs at.
+    m_db->syncVersionMark();
+
+    // Polling only pays off against a shared server.
+    if (m_db->isServerBackend()) {
+        if (!m_liveSyncTimer.isActive()) m_liveSyncTimer.start();
+    } else {
+        m_liveSyncTimer.stop();
+    }
 
     loadVendors();
     loadItemMaster();

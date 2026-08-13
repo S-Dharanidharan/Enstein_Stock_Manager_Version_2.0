@@ -18,8 +18,66 @@ ApplicationWindow {
     property string fileType: "stock"
     property int tableRefreshToken: 0
     property bool dbSetupBusy: false
+    // ---- Stock overview / department segregation ----
+    // Empty means "all departments"; anything else filters the grid and the chart.
+    property string selectedDepartment: ""
+    property var deptSummary: []
+    property var stockTotalsData: ({})
+    property var visibleStockRows: []
+    property bool overviewExpanded: true
+
+    // Categorical slots, in fixed order, validated for colour-vision separation
+    // against a light surface. Departments take a slot by name (see
+    // departmentStockSummary), never by rank, so a colour never migrates between
+    // departments when quantities change. Past the sixth, holdings fold into a
+    // neutral "Other" slice rather than inventing a new hue.
+    readonly property var seriesColors: ["#2a78d6", "#eb6834", "#1baf7a",
+                                         "#eda100", "#e87ba4", "#008300"]
+    readonly property color seriesOther: "#9aa0a6"
+    readonly property int maxColoredSlices: 6
+
+    function departmentColor(colorIndex) {
+        if (colorIndex < 0) return seriesOther
+        return seriesColors[colorIndex % seriesColors.length]
+    }
+
+    function refreshStockOverview() {
+        deptSummary = excelHandler.departmentStockSummary()
+        stockTotalsData = excelHandler.stockTotals()
+        visibleStockRows = excelHandler.stockRowsForDepartment(selectedDepartment)
+    }
+
+    // The slices actually drawn: the biggest holdings keep their own colour and
+    // the tail becomes one labelled "Other", so the ring never carries more
+    // hues than a reader can tell apart.
+    function donutSlices() {
+        var out = []
+        var otherQty = 0
+        var otherCount = 0
+        for (var i = 0; i < deptSummary.length; i++) {
+            var d = deptSummary[i]
+            if (d.qty <= 0) continue
+            if (out.length < maxColoredSlices) {
+                out.push({ label: d.department, qty: d.qty,
+                           color: departmentColor(d.colorIndex), isOther: false })
+            } else {
+                otherQty += d.qty
+                otherCount++
+            }
+        }
+        if (otherQty > 0) {
+            out.push({ label: "Other (" + otherCount + ")", qty: otherQty,
+                       color: seriesOther, isOther: true })
+        }
+        return out
+    }
+
     property var tableBaseWidths: [350, 190, 130, 200, 180, 200, 260, 190, 140]
     property var tableMinWidths: [140, 90, 70, 90, 90, 90, 110, 90, 80]
+
+    onRowsChanged: refreshStockOverview()
+    onTableRefreshTokenChanged: refreshStockOverview()
+    onSelectedDepartmentChanged: refreshStockOverview()
 
     function columnWidth(colIndex) {
         var available = Math.max(800, tableHeader.width - 40)
@@ -68,6 +126,17 @@ ApplicationWindow {
 
         onSearchResultFound: function(row) {
             root.selectedRow = row
+        }
+
+        // Another machine changed the shared data; it has already been reloaded.
+        onSharedDataChanged: {
+            root.rows = excelHandler.model.rowCount()
+            root.columns = excelHandler.model.columnCount()
+            root.tableRefreshToken++
+            refreshStockOverview()
+            refreshPOList()
+            statusLabel.text = "Updated \u2014 someone else changed the shared data"
+            statusTimer.restart()
         }
 
         onPurchaseOrderCreated: function(poNo) {
@@ -1161,10 +1230,60 @@ ApplicationWindow {
         return parseAmount(value).toFixed(2)
     }
 
+    // Indian digit grouping (12,34,56,789.00) so amounts stay readable all the
+    // way up to crores, matching the grouping on the printed purchase order.
+    function groupIndianDigits(value) {
+        var n = parseAmount(value)
+        var fixed = Math.abs(n).toFixed(2)
+        var dot = fixed.indexOf(".")
+        var whole = fixed.substring(0, dot)
+        var frac = fixed.substring(dot)
+        if (whole.length > 3) {
+            var last3 = whole.substring(whole.length - 3)
+            var lead = whole.substring(0, whole.length - 3)
+            var grouped = ""
+            // Everything above the last three digits is grouped in pairs.
+            while (lead.length > 2) {
+                grouped = "," + lead.substring(lead.length - 2) + grouped
+                lead = lead.substring(0, lead.length - 2)
+            }
+            whole = lead + grouped + "," + last3
+        }
+        return (n < 0 ? "-" : "") + whole + frac
+    }
+
     function formatRupees(value) {
-        var n = parseFloat(value)
-        if (isNaN(n)) n = 0
-        return "\u20B9 " + n.toFixed(2)
+        return "\u20B9 " + groupIndianDigits(value)
+    }
+
+    // Opens the shared calendar for a date field. seedField supplies the month
+    // to land on when the target is still empty, so picking the end of a period
+    // starts from its beginning rather than from today.
+    function openDatePicker(field, purpose, seedField) {
+        expectedDateDialog.targetField = field
+        expectedDateDialog.purpose = purpose
+        expectedDateDialog.seedText = (field.text === "" && seedField) ? seedField.text : field.text
+        expectedDateDialog.open()
+    }
+
+    // "from -> to" for a required period, collapsing to a single date when only
+    // one end is known. Mirrors expectedPeriod() on the printed order.
+    function formatPeriod(fromText, toText) {
+        var from = (fromText || "").toString().trim()
+        var to = (toText || "").toString().trim()
+        if (from === "" && to === "") return "-"
+        if (to === "" || from === to) return from === "" ? to : from
+        if (from === "") return "up to " + to
+        return from + " \u2192 " + to
+    }
+
+    // Inclusive length of the period, or 0 when it is not a usable range.
+    function periodDays(fromText, toText) {
+        var from = new Date(fromText)
+        var to = new Date(toText)
+        if (isNaN(from.getTime()) || isNaN(to.getTime())) return 0
+        var days = Math.round((to.getTime() - from.getTime()) / 86400000) + 1
+        return days > 0 ? days : 0
     }
 
     function showPoPartDetails(partName) {
@@ -1233,31 +1352,54 @@ ApplicationWindow {
         title: "Purchase Order Management"
         modal: true
         anchors.centerIn: parent
-        width: 780; height: 760
+        width: parent ? Math.min(1140, parent.width - 60) : 1140
+        height: parent ? Math.min(840, parent.height - 60) : 840
 
         ColumnLayout {
-            anchors.fill: parent; spacing: 10
+            anchors.fill: parent; spacing: 12
 
             Label { text: "Purchase Orders"; font.bold: true; font.pixelSize: 16; color: "#2c3e50" }
 
-            // Create PO Form - add one or more items to the cart, then create
+            // Create PO Form - add one or more items to the cart, then create.
+            // The card takes its height from the grid so the editors always get
+            // their full height instead of being squeezed into a fixed box.
             Rectangle {
-                Layout.fillWidth: true; Layout.preferredHeight: 170
+                Layout.fillWidth: true
+                Layout.preferredHeight: poEntryGrid.implicitHeight + 2 * poEntryGrid.anchors.margins
                 color: "#f0f8ff"; border.color: "#3498db"; radius: 5
 
                 GridLayout {
-                    anchors.fill: parent; anchors.margins: 10
-                    columns: 4; rowSpacing: 8; columnSpacing: 10
+                    id: poEntryGrid
+                    anchors.left: parent.left; anchors.right: parent.right; anchors.top: parent.top
+                    anchors.margins: 14
+                    columns: 4; rowSpacing: 12; columnSpacing: 16
 
-                    Label { text: "Next PO:"; font.bold: true } Label { text: excelHandler.getNextPONumber(); color: "#3498db"; font.bold: true }
-                    Label { text: "Date:" } Label { text: Qt.formatDate(new Date(), "yyyy-MM-dd") }
+                    // The two caption columns keep a fixed width so both field
+                    // columns start on the same edge.
+                    Label {
+                        text: "Next PO:"; font.bold: true
+                        Layout.minimumWidth: 92; horizontalAlignment: Text.AlignRight
+                        Layout.alignment: Qt.AlignRight | Qt.AlignVCenter
+                    }
+                    Label { text: excelHandler.getNextPONumber(); color: "#3498db"; font.bold: true; Layout.fillWidth: true }
+                    Label {
+                        text: "Date:"
+                        Layout.minimumWidth: 92; horizontalAlignment: Text.AlignRight
+                        Layout.alignment: Qt.AlignRight | Qt.AlignVCenter
+                    }
+                    Label { text: Qt.formatDate(new Date(), "yyyy-MM-dd"); Layout.fillWidth: true }
 
-                    Label { text: "Part Name*:" }
+                    Label {
+                        text: "Part Name*:"; horizontalAlignment: Text.AlignRight
+                        Layout.alignment: Qt.AlignRight | Qt.AlignVCenter
+                    }
                     RowLayout {
                         Layout.fillWidth: true
+                        spacing: 6
                         ComboBox {
                             id: poPartNameField
                             Layout.fillWidth: true
+                            Layout.minimumWidth: 180
                             editable: true
                             model: []
                             onCurrentTextChanged: applyPoPartDetails(currentText)
@@ -1267,6 +1409,7 @@ ApplicationWindow {
                         }
                         Button {
                             text: "\u{1F50D}"
+                            Layout.preferredWidth: 40
                             ToolTip.visible: hovered
                             ToolTip.text: "Search the Item Master"
                             onClicked: openPoPartPicker()
@@ -1274,28 +1417,44 @@ ApplicationWindow {
                         Button {
                             text: "i"
                             font.bold: true
+                            Layout.preferredWidth: 34
                             ToolTip.visible: hovered
                             ToolTip.text: "Show selected part details"
                             onClicked: showPoPartDetails(poPartNameField.currentText)
                         }
                     }
-                    Label { text: "Vendor*:" }
+                    Label {
+                        text: "Vendor*:"; horizontalAlignment: Text.AlignRight
+                        Layout.alignment: Qt.AlignRight | Qt.AlignVCenter
+                    }
                     RowLayout {
                         Layout.fillWidth: true
+                        spacing: 6
                         ComboBox {
-                            id: poVendorField; Layout.fillWidth: true; editable: true
+                            id: poVendorField
+                            Layout.fillWidth: true
+                            Layout.minimumWidth: 180
+                            editable: true
                             model: excelHandler.getVendorNames()
                         }
                         Button {
                             text: "\u{1F50D}"
+                            Layout.preferredWidth: 40
                             ToolTip.visible: hovered
                             ToolTip.text: "Search vendors"
                             onClicked: openPoVendorPicker()
                         }
                     }
 
-                    Label { text: "Part No:" } TextField { id: poPartNoField; Layout.fillWidth: true; placeholderText: "Part number" }
-                    Label { text: "Department:" }
+                    Label {
+                        text: "Part No:"; horizontalAlignment: Text.AlignRight
+                        Layout.alignment: Qt.AlignRight | Qt.AlignVCenter
+                    }
+                    TextField { id: poPartNoField; Layout.fillWidth: true; placeholderText: "Part number"; selectByMouse: true }
+                    Label {
+                        text: "Department:"; horizontalAlignment: Text.AlignRight
+                        Layout.alignment: Qt.AlignRight | Qt.AlignVCenter
+                    }
                     TextField {
                         id: poDepartmentField
                         Layout.fillWidth: true
@@ -1306,55 +1465,131 @@ ApplicationWindow {
                         onTextEdited: poDepartmentAutoFilled = false
                     }
 
-                    Label { text: "Qty*:" } SpinBox { id: poQtyField; from: 1; to: 100000; value: 1; editable: true }
-                    Label { text: "Unit Price:" }
-                    TextField {
-                        id: poUnitPriceField
+                    Label {
+                        text: "Qty*:"; horizontalAlignment: Text.AlignRight
+                        Layout.alignment: Qt.AlignRight | Qt.AlignVCenter
+                    }
+                    SpinBox { id: poQtyField; from: 1; to: 100000; value: 1; editable: true; Layout.fillWidth: true }
+                    Label {
+                        text: "Unit Price:"; horizontalAlignment: Text.AlignRight
+                        Layout.alignment: Qt.AlignRight | Qt.AlignVCenter
+                    }
+                    RowLayout {
                         Layout.fillWidth: true
-                        placeholderText: "0.00"
-                        text: "0.00"
-                        validator: DoubleValidator { bottom: 0; decimals: 2 }
-                        inputMethodHints: Qt.ImhFormattedNumbersOnly
-                        selectByMouse: true
+                        spacing: 6
+                        Label { text: "\u20B9"; font.bold: true; color: "#2c3e50" }
+                        TextField {
+                            id: poUnitPriceField
+                            Layout.fillWidth: true
+                            // Wide enough to show a crore-scale rate in full.
+                            Layout.minimumWidth: 170
+                            placeholderText: "0.00"
+                            text: "0.00"
+                            horizontalAlignment: TextInput.AlignRight
+                            validator: DoubleValidator { bottom: 0; decimals: 2 }
+                            inputMethodHints: Qt.ImhFormattedNumbersOnly
+                            selectByMouse: true
+                        }
                     }
 
-                    Label { text: "Line Total:"; font.bold: true }
+                    Label {
+                        text: "Line Total:"; font.bold: true
+                        horizontalAlignment: Text.AlignRight
+                        Layout.alignment: Qt.AlignRight | Qt.AlignVCenter
+                    }
+                    // Spans both field columns so even a crore total fits.
                     Label {
                         text: formatRupees(poQtyField.value * parseAmount(poUnitPriceField.text))
                         color: "#27ae60"
                         font.bold: true
+                        font.pixelSize: 15
+                        Layout.columnSpan: 2
+                        Layout.fillWidth: true
                     }
-                    Item {}
                     Button {
                         text: "+ Add Item"
                         highlighted: true
+                        Layout.minimumWidth: 120
+                        Layout.alignment: Qt.AlignRight
                         onClicked: addPoItemToCart()
                     }
                 }
             }
 
-            // Cart: items that will go into this PO
+            // Cart: items that will go into this PO. It grows with the item
+            // count up to four rows and then scrolls, so an empty cart does not
+            // steal vertical room from the PO list below.
             Rectangle {
-                Layout.fillWidth: true; Layout.preferredHeight: 120
+                Layout.fillWidth: true
+                Layout.preferredHeight: poCartModel.count === 0
+                                        ? 64
+                                        : Math.min(196, 48 + poCartModel.count * 40)
                 border.color: "#3498db"; radius: 5; color: "#fbfdff"
 
-                ListView {
-                    id: poCartView
-                    anchors.fill: parent; anchors.margins: 5; clip: true; spacing: 2
-                    model: poCartModel
-                    delegate: Rectangle {
-                        width: poCartView.width - 10; height: 26
-                        color: "#fff"; border.color: "#e0e0e0"; radius: 3
-                        RowLayout {
-                            anchors.fill: parent; anchors.margins: 4
-                            Label { text: (index + 1) + ". " + model.partName; font.bold: true; font.pixelSize: 11; Layout.preferredWidth: 200; elide: Text.ElideRight }
-                            Label { text: "Vendor: " + model.vendor; font.pixelSize: 11; color: "#7f8c8d"; Layout.preferredWidth: 160; elide: Text.ElideRight }
-                            Label { text: model.qty + " x " + formatRupees(model.unitPrice) + " = " + formatRupees(model.lineTotal); font.pixelSize: 11; color: "#27ae60"; Layout.fillWidth: true }
-                            Button {
-                                text: "X"
-                                Layout.preferredWidth: 26; Layout.preferredHeight: 20
-                                onClicked: { poCartModel.remove(index); recalcPoCartTotal() }
-                                contentItem: Text { text: "X"; color: "#e74c3c"; font.pixelSize: 10; font.bold: true; horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter }
+                ColumnLayout {
+                    anchors.fill: parent; anchors.margins: 8; spacing: 6
+
+                    // Column captions, matching the delegate widths below, so
+                    // the qty/rate/amount columns read as a table.
+                    RowLayout {
+                        Layout.fillWidth: true
+                        Layout.leftMargin: 6; Layout.rightMargin: 6
+                        spacing: 10
+                        visible: poCartModel.count > 0
+                        Label { text: "Item"; font.bold: true; font.pixelSize: 11; color: "#7f8c8d"; Layout.fillWidth: true }
+                        Label { text: "Vendor"; font.bold: true; font.pixelSize: 11; color: "#7f8c8d"; Layout.preferredWidth: 190 }
+                        Label { text: "Qty"; font.bold: true; font.pixelSize: 11; color: "#7f8c8d"; Layout.preferredWidth: 70; horizontalAlignment: Text.AlignRight }
+                        Label { text: "Rate"; font.bold: true; font.pixelSize: 11; color: "#7f8c8d"; Layout.preferredWidth: 170; horizontalAlignment: Text.AlignRight }
+                        Label { text: "Amount"; font.bold: true; font.pixelSize: 11; color: "#7f8c8d"; Layout.preferredWidth: 180; horizontalAlignment: Text.AlignRight }
+                        Item { Layout.preferredWidth: 30 }
+                    }
+
+                    ListView {
+                        id: poCartView
+                        Layout.fillWidth: true; Layout.fillHeight: true
+                        clip: true; spacing: 6
+                        model: poCartModel
+                        delegate: Rectangle {
+                            width: poCartView.width; height: 34
+                            color: "#fff"; border.color: "#e0e0e0"; radius: 3
+                            RowLayout {
+                                anchors.fill: parent
+                                anchors.leftMargin: 6; anchors.rightMargin: 6
+                                anchors.topMargin: 3; anchors.bottomMargin: 3
+                                spacing: 10
+                                Label {
+                                    text: (index + 1) + ". " + model.partName
+                                    font.bold: true; font.pixelSize: 11
+                                    Layout.fillWidth: true; Layout.minimumWidth: 120
+                                    elide: Text.ElideRight
+                                }
+                                Label {
+                                    text: model.vendor
+                                    font.pixelSize: 11; color: "#7f8c8d"
+                                    Layout.preferredWidth: 190; elide: Text.ElideRight
+                                }
+                                Label {
+                                    text: model.qty
+                                    font.pixelSize: 11; color: "#2c3e50"
+                                    Layout.preferredWidth: 70; horizontalAlignment: Text.AlignRight
+                                }
+                                Label {
+                                    text: formatRupees(model.unitPrice)
+                                    font.pixelSize: 11; color: "#2c3e50"
+                                    Layout.preferredWidth: 170; horizontalAlignment: Text.AlignRight
+                                }
+                                Label {
+                                    text: formatRupees(model.lineTotal)
+                                    font.pixelSize: 12; font.bold: true; color: "#27ae60"
+                                    Layout.preferredWidth: 180; horizontalAlignment: Text.AlignRight
+                                }
+                                Button {
+                                    Layout.preferredWidth: 30; Layout.preferredHeight: 24
+                                    ToolTip.visible: hovered
+                                    ToolTip.text: "Remove this item"
+                                    onClicked: { poCartModel.remove(index); recalcPoCartTotal() }
+                                    contentItem: Text { text: "X"; color: "#e74c3c"; font.pixelSize: 11; font.bold: true; horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter }
+                                }
                             }
                         }
                     }
@@ -1367,36 +1602,115 @@ ApplicationWindow {
                 }
             }
 
-            // PO-level fields + create
+            // The period the goods are needed in, plus who prepared the order
             RowLayout {
-                Layout.fillWidth: true; spacing: 8
+                Layout.fillWidth: true; spacing: 10
 
-                Label { text: "Expected:" }
+                Label { text: "Needed from:"; font.bold: true }
                 TextField {
                     id: poExpectedField
-                    Layout.preferredWidth: 110
+                    Layout.preferredWidth: 120
                     placeholderText: "YYYY-MM-DD"
                     readOnly: true
                     selectByMouse: true
                 }
-                Button { text: "Pick"; onClicked: expectedDateDialog.open() }
+                Button {
+                    text: "\u{1F4C5}"
+                    Layout.preferredWidth: 38
+                    ToolTip.visible: hovered
+                    ToolTip.text: "Pick the start of the period"
+                    onClicked: openDatePicker(poExpectedField, "period start")
+                }
+
+                Label { text: "to:"; font.bold: true }
+                TextField {
+                    id: poExpectedEndField
+                    Layout.preferredWidth: 120
+                    placeholderText: "YYYY-MM-DD"
+                    readOnly: true
+                    selectByMouse: true
+                }
+                Button {
+                    text: "\u{1F4C5}"
+                    Layout.preferredWidth: 38
+                    ToolTip.visible: hovered
+                    ToolTip.text: "Pick the end of the period"
+                    onClicked: openDatePicker(poExpectedEndField, "period end", poExpectedField)
+                }
+                Button {
+                    text: "\u2715"
+                    Layout.preferredWidth: 32
+                    enabled: poExpectedField.text !== "" || poExpectedEndField.text !== ""
+                    ToolTip.visible: hovered
+                    ToolTip.text: "Clear the period"
+                    onClicked: { poExpectedField.text = ""; poExpectedEndField.text = "" }
+                }
+
+                // Reads back the period so the requirement is unmistakable, and
+                // says so plainly when the dates are the wrong way round.
+                Label {
+                    property int days: periodDays(poExpectedField.text, poExpectedEndField.text)
+                    property bool reversed: poExpectedField.text !== "" &&
+                                            poExpectedEndField.text !== "" &&
+                                            poExpectedEndField.text < poExpectedField.text
+                    text: reversed
+                          ? "End date is before the start date"
+                          : (days > 0 ? days + (days === 1 ? " day" : " days") : "")
+                    color: reversed ? "#e74c3c" : "#7f8c8d"
+                    font.pixelSize: 11
+                    font.bold: reversed
+                }
+
+                Item { Layout.fillWidth: true }
 
                 Label { text: "Prepared By*:" }
                 TextField {
                     id: poPreparedByField
-                    Layout.fillWidth: true
+                    Layout.preferredWidth: 180
                     placeholderText: "Enter preparer name"
                     text: excelHandler.currentUser
                     selectByMouse: true
                 }
+            }
 
-                Label { text: "Total: " + formatRupees(poCartTotal); font.bold: true; color: "#27ae60" }
+            // Cart total + create
+            RowLayout {
+                Layout.fillWidth: true; spacing: 12
+
+                Item { Layout.fillWidth: true }
+
+                // Cart total gets its own boxed area so it stays legible even
+                // at crore values instead of squeezing the fields beside it.
+                Rectangle {
+                    Layout.preferredWidth: 260
+                    Layout.preferredHeight: 38
+                    Layout.leftMargin: 6
+                    color: "#eafaf1"; border.color: "#27ae60"; radius: 4
+                    RowLayout {
+                        anchors.fill: parent; anchors.leftMargin: 10; anchors.rightMargin: 10
+                        Label { text: "Total"; font.bold: true; color: "#2c3e50"; font.pixelSize: 12 }
+                        Label {
+                            text: formatRupees(poCartTotal)
+                            font.bold: true; font.pixelSize: 15; color: "#27ae60"
+                            Layout.fillWidth: true
+                            horizontalAlignment: Text.AlignRight
+                        }
+                    }
+                }
 
                 Button {
                     text: "Create PO (" + poCartModel.count + (poCartModel.count === 1 ? " item)" : " items)")
                     highlighted: true
                     enabled: poCartModel.count > 0
                     onClicked: {
+                        // A backwards period would print nonsense on the order,
+                        // so stop before anything is written.
+                        if (poExpectedField.text !== "" && poExpectedEndField.text !== "" &&
+                            poExpectedEndField.text < poExpectedField.text) {
+                            statusLabel.text = "Needed period: the end date cannot be before the start date"
+                            statusTimer.restart()
+                            return
+                        }
                         var items = []
                         for (var i = 0; i < poCartModel.count; i++) {
                             var it = poCartModel.get(i)
@@ -1407,11 +1721,13 @@ ApplicationWindow {
                             })
                         }
                         var poNo = excelHandler.createPurchaseOrderItems(
-                            items, poExpectedField.text, poPreparedByField.text)
+                            items, poExpectedField.text, poExpectedEndField.text,
+                            poPreparedByField.text)
                         if (poNo !== "") {
                             poCartModel.clear()
                             recalcPoCartTotal()
                             poExpectedField.text = ""
+                            poExpectedEndField.text = ""
                             refreshPOList()
                             openPoPdfPreview(poNo)
                         }
@@ -1419,15 +1735,48 @@ ApplicationWindow {
                 }
             }
 
-            // Filter
+            // Status filter + free-text search across the PO list
             RowLayout {
-                Label { text: "Filter:"; font.bold: true } 
+                Layout.fillWidth: true; Layout.topMargin: 4; spacing: 10
+
+                Label { text: "Filter:"; font.bold: true }
                 ComboBox {
                     id: poFilterCombo
+                    Layout.preferredWidth: 170
                     model: ["All", "Draft", "Sent", "Partially Received", "Received", "Closed"]
                     onCurrentTextChanged: refreshPOList()
                 }
-                Item { Layout.fillWidth: true }
+
+                Label { text: "Search:"; font.bold: true; Layout.leftMargin: 6 }
+                TextField {
+                    id: poSearchField
+                    Layout.fillWidth: true
+                    Layout.minimumWidth: 240
+                    placeholderText: "PO number, vendor, part name, or date (e.g. 2026-08)"
+                    selectByMouse: true
+                    onTextChanged: applyPoSearch()
+                    // Clear the search first; only pass Escape on to the dialog
+                    // once there is nothing left to clear.
+                    Keys.onEscapePressed: function(event) {
+                        if (text !== "") text = ""
+                        else event.accepted = false
+                    }
+                }
+                Button {
+                    text: "\u2715"
+                    Layout.preferredWidth: 34
+                    enabled: poSearchField.text !== ""
+                    ToolTip.visible: hovered
+                    ToolTip.text: "Clear the search"
+                    onClicked: poSearchField.text = ""
+                }
+
+                Label {
+                    text: poSearchField.text.trim() === ""
+                          ? poListModel.count + (poListModel.count === 1 ? " PO" : " POs")
+                          : poListModel.count + " of " + poRowsCache.length + " match"
+                    color: "#7f8c8d"; font.pixelSize: 11
+                }
                 Label { text: "Pending: " + excelHandler.pendingPOCount; font.bold: true; color: "#e67e22" }
             }
 
@@ -1440,7 +1789,7 @@ ApplicationWindow {
                     id: poListView; anchors.fill: parent; anchors.margins: 5; clip: true; spacing: 4
                     model: ListModel { id: poListModel }
                     delegate: Rectangle {
-                        width: poListView.width - 10; height: 70
+                        width: poListView.width - 10; height: 78
                         color: {
                             if (model.status === "Received") return "#e8f8e8"
                             if (model.status === "Draft") return "#fff8e8"
@@ -1449,10 +1798,12 @@ ApplicationWindow {
                         border.color: "#e0e0e0"; radius: 4
 
                         RowLayout {
-                            anchors.fill: parent; anchors.margins: 8
+                            anchors.fill: parent; anchors.margins: 10
+                            spacing: 12
                             ColumnLayout {
-                                Layout.fillWidth: true; spacing: 2
+                                Layout.fillWidth: true; Layout.minimumWidth: 180; spacing: 3
                                 RowLayout {
+                                    spacing: 8
                                     Label { text: model.poNo; font.bold: true; font.pixelSize: 13; color: "#2c3e50" }
                                     Label {
                                         text: model.status
@@ -1466,15 +1817,42 @@ ApplicationWindow {
                                         }
                                     }
                                 }
-                                Label { text: model.partName + " | Qty: " + model.qty + " | Vendor: " + model.vendor; font.pixelSize: 11; color: "#7f8c8d" }
                                 Label {
-                                    text: "Price: " + formatRupees(model.unitPrice) +
-                                          " | Total: " + formatRupees(model.totalAmount) +
-                                          " | Date: " + model.date +
-                                          " | Received: " + model.receivedQty + "/" + model.qty +
-                                          " | Rec Date: " + (model.receivedDate || "-")
+                                    text: model.partName + "  |  Qty: " + model.qty + "  |  Vendor: " + model.vendor
+                                    font.pixelSize: 11; color: "#7f8c8d"
+                                    Layout.fillWidth: true; elide: Text.ElideRight
+                                }
+                                Label {
+                                    text: "Date: " + model.date +
+                                          "  |  Needed: " + formatPeriod(model.expectedDate, model.expectedEndDate) +
+                                          "  |  Received: " + model.receivedQty + "/" + model.qty +
+                                          "  |  Rec Date: " + (model.receivedDate || "-")
                                     font.pixelSize: 10
                                     color: "#95a5a6"
+                                    Layout.fillWidth: true; elide: Text.ElideRight
+                                }
+                            }
+
+                            // Amounts get a dedicated right-aligned column so a
+                            // crore-scale total is never elided by the details.
+                            ColumnLayout {
+                                Layout.preferredWidth: 200
+                                Layout.alignment: Qt.AlignVCenter
+                                spacing: 2
+                                Label {
+                                    text: formatRupees(model.totalAmount)
+                                    font.bold: true; font.pixelSize: 14; color: "#27ae60"
+                                    Layout.fillWidth: true; horizontalAlignment: Text.AlignRight
+                                }
+                                Label {
+                                    // A single rate only means something on a
+                                    // one-line PO; otherwise show the line count.
+                                    text: model.unitPrice > 0
+                                          ? formatRupees(model.unitPrice) + " / unit"
+                                          : (model.itemCount > 1 ? model.itemCount + " line items" : "")
+                                    visible: text !== ""
+                                    font.pixelSize: 10; color: "#95a5a6"
+                                    Layout.fillWidth: true; horizontalAlignment: Text.AlignRight
                                 }
                             }
 
@@ -1493,6 +1871,7 @@ ApplicationWindow {
                                         unitPrice: model.unitPrice,
                                         totalAmount: model.totalAmount,
                                         expectedDate: model.expectedDate,
+                                        expectedEndDate: model.expectedEndDate,
                                         status: model.status,
                                         receivedQty: model.receivedQty,
                                         preparedBy: model.preparedBy || "",
@@ -1518,6 +1897,7 @@ ApplicationWindow {
                                     editPoQtyField.value = model.qty || 1
                                     editPoUnitPriceField.text = formatAmount(model.unitPrice)
                                     editPoExpectedField.text = model.expectedDate || ""
+                                    editPoExpectedEndField.text = model.expectedEndDate || ""
                                     editPoPreparedByField.text = model.preparedBy || excelHandler.currentUser
                                     poEditDialog.open()
                                 }
@@ -1555,13 +1935,23 @@ ApplicationWindow {
                     }
                 }
 
-                Label { anchors.centerIn: parent; text: "No purchase orders"; visible: poListModel.count === 0; color: "#95a5a6" }
+                Label {
+                    anchors.centerIn: parent
+                    width: parent.width - 40
+                    horizontalAlignment: Text.AlignHCenter
+                    elide: Text.ElideRight
+                    text: poSearchField.text.trim() === ""
+                          ? "No purchase orders"
+                          : "No purchase orders match \"" + poSearchField.text.trim() + "\""
+                    visible: poListModel.count === 0; color: "#95a5a6"
+                }
             }
 
             Button { text: "Close"; Layout.alignment: Qt.AlignRight; onClicked: poDialog.close() }
         }
 
         onOpened: {
+            poSearchField.text = ""
             refreshPOList()
             refreshVendorDropdowns()
             refreshPartNameDropdown()
@@ -1634,15 +2024,50 @@ ApplicationWindow {
                 TextField {
                     id: editPoUnitPriceField
                     Layout.fillWidth: true
+                    Layout.minimumWidth: 170
                     placeholderText: "0.00"
                     text: "0.00"
+                    horizontalAlignment: TextInput.AlignRight
                     validator: DoubleValidator { bottom: 0; decimals: 2 }
                     inputMethodHints: Qt.ImhFormattedNumbersOnly
                     selectByMouse: true
                 }
 
-                Label { text: "Expected Date:" }
-                TextField { id: editPoExpectedField; Layout.fillWidth: true; placeholderText: "YYYY-MM-DD"; selectByMouse: true }
+                Label { text: "Needed From:" }
+                RowLayout {
+                    Layout.fillWidth: true; spacing: 6
+                    TextField {
+                        id: editPoExpectedField
+                        Layout.fillWidth: true
+                        placeholderText: "YYYY-MM-DD"
+                        selectByMouse: true
+                    }
+                    Button {
+                        text: "\u{1F4C5}"
+                        Layout.preferredWidth: 38
+                        ToolTip.visible: hovered
+                        ToolTip.text: "Pick the start of the period"
+                        onClicked: openDatePicker(editPoExpectedField, "period start")
+                    }
+                }
+
+                Label { text: "Needed To:" }
+                RowLayout {
+                    Layout.fillWidth: true; spacing: 6
+                    TextField {
+                        id: editPoExpectedEndField
+                        Layout.fillWidth: true
+                        placeholderText: "YYYY-MM-DD (optional)"
+                        selectByMouse: true
+                    }
+                    Button {
+                        text: "\u{1F4C5}"
+                        Layout.preferredWidth: 38
+                        ToolTip.visible: hovered
+                        ToolTip.text: "Pick the end of the period"
+                        onClicked: openDatePicker(editPoExpectedEndField, "period end", editPoExpectedField)
+                    }
+                }
 
                 Label { text: "Prepared By:" }
                 TextField { id: editPoPreparedByField; Layout.fillWidth: true; selectByMouse: true }
@@ -1651,11 +2076,20 @@ ApplicationWindow {
             Label {
                 text: "Total: " + formatRupees(editPoQtyField.value * parseAmount(editPoUnitPriceField.text))
                 font.bold: true
+                font.pixelSize: 15
                 color: "#27ae60"
+                Layout.fillWidth: true
+                horizontalAlignment: Text.AlignRight
             }
         }
 
         onAccepted: {
+                if (editPoExpectedField.text !== "" && editPoExpectedEndField.text !== "" &&
+                    editPoExpectedEndField.text < editPoExpectedField.text) {
+                    statusLabel.text = "Needed period: the end date cannot be before the start date"
+                    statusTimer.restart()
+                    return
+                }
                 var payload = {
                     vendor: editPoVendorField.text,
                     partName: editPoPartNameField.text,
@@ -1664,6 +2098,7 @@ ApplicationWindow {
                     qty: editPoQtyField.value,
                     unitPrice: parseAmount(editPoUnitPriceField.text),
                     expectedDate: editPoExpectedField.text,
+                    expectedEndDate: editPoExpectedEndField.text,
                     preparedBy: editPoPreparedByField.text
                 }
 
@@ -1679,7 +2114,7 @@ ApplicationWindow {
         modal: true
         anchors.centerIn: parent
         standardButtons: Dialog.Ok
-        width: 500
+        width: 680
 
         ColumnLayout {
             anchors.fill: parent
@@ -1698,6 +2133,8 @@ ApplicationWindow {
                           "  | Vendor: " + (modelData.vendor || "-") +
                           "  | Recv: " + (modelData.receivedQty || 0) + "/" + (modelData.qty || 0)
                     font.pixelSize: 12
+                    Layout.fillWidth: true
+                    wrapMode: Text.WordWrap
                 }
             }
 
@@ -1705,7 +2142,11 @@ ApplicationWindow {
             Label { text: "Vendor(s): " + (selectedPODetails.vendor || "-") }
             Label { text: "Total Qty: " + (selectedPODetails.qty || 0) }
             Label { text: "Total Price: " + formatRupees(selectedPODetails.totalAmount || 0); font.bold: true; color: "#27ae60" }
-            Label { text: "Expected Date: " + (selectedPODetails.expectedDate || "-") }
+            Label {
+                text: "Needed Period: " + formatPeriod(selectedPODetails.expectedDate,
+                                                       selectedPODetails.expectedEndDate)
+                font.bold: true
+            }
             Label { text: "Status: " + (selectedPODetails.status || "-") }
             Label { text: "Prepared By: " + (selectedPODetails.preparedBy || "-") }
             Label { text: "Approved By: " + (selectedPODetails.approvedBy || "-") }
@@ -2081,9 +2522,11 @@ ApplicationWindow {
         }
     }
 
+    // Shared by every date field in the PO screens; openDatePicker() below sets
+    // which field the pick lands in and what to seed the calendar with.
     Dialog {
         id: expectedDateDialog
-        title: "Select Expected Date"
+        title: "Select " + purpose
         modal: true
         anchors.centerIn: parent
         standardButtons: Dialog.Ok | Dialog.Cancel
@@ -2092,9 +2535,12 @@ ApplicationWindow {
         property int displayMonth: (new Date()).getMonth() + 1
         property int displayYear: (new Date()).getFullYear()
         property date selectedDate: new Date()
+        property var targetField: null
+        property string purpose: "Date"
+        property string seedText: ""
 
         onOpened: {
-            var parsed = new Date(poExpectedField.text)
+            var parsed = new Date(seedText)
             if (!isNaN(parsed.getTime())) {
                 selectedDate = parsed
             } else {
@@ -2105,7 +2551,7 @@ ApplicationWindow {
         }
 
         onAccepted: {
-            poExpectedField.text = Qt.formatDate(selectedDate, "yyyy-MM-dd")
+            if (targetField) targetField.text = Qt.formatDate(selectedDate, "yyyy-MM-dd")
         }
 
         ColumnLayout {
@@ -2190,11 +2636,34 @@ ApplicationWindow {
         }
     }
 
+    // Rows for the current status filter, plus the poNo -> searchable-text map
+    // from the backend. Both are fetched once per refresh so typing in the
+    // search box neither re-queries nor rebuilds any strings per keystroke.
+    property var poRowsCache: []
+    property var poSearchIndex: ({})
+
     function refreshPOList() {
-        poListModel.clear()
         var filter = poFilterCombo.currentText === "All" ? "" : poFilterCombo.currentText
-        var pos = excelHandler.getPOList(filter)
-        for (var i = 0; i < pos.length; i++) poListModel.append(pos[i])
+        poRowsCache = excelHandler.getPOList(filter)
+        poSearchIndex = excelHandler.getPOSearchIndex()
+        applyPoSearch()
+    }
+
+    // Each whitespace-separated word must appear somewhere in the order, so
+    // extra words narrow the result down instead of widening it: "acme bolt"
+    // wants both, and "2026-08 draft" is a date-plus-status search.
+    function applyPoSearch() {
+        var terms = poSearchField.text.toLowerCase().trim().split(/\s+/)
+        poListModel.clear()
+        for (var i = 0; i < poRowsCache.length; i++) {
+            var haystack = poSearchIndex[poRowsCache[i].poNo] || ""
+            var matches = true
+            for (var t = 0; t < terms.length; t++) {
+                if (terms[t] === "") continue
+                if (haystack.indexOf(terms[t]) === -1) { matches = false; break }
+            }
+            if (matches) poListModel.append(poRowsCache[i])
+        }
     }
 
     /* ================= GRN (GOODS RECEIPT) DIALOG ================= */
@@ -2746,14 +3215,21 @@ ApplicationWindow {
 
     /* ================= DATABASE CONNECTION DIALOG ================= */
 
+    // True while this computer is talking to a shared server rather than its own
+    // local file; gates the one-time "copy my data up" step below.
+    property bool dbOnServer: false
+
     Dialog {
         id: cloudSettingsDialog
         title: "Database Connection"
         modal: true
-        width: 540
+        width: 560
+        height: parent ? Math.min(780, parent.height - 60) : 780
         anchors.centerIn: parent
 
         onOpened: {
+            root.dbOnServer = excelHandler.isDatabaseServerBackend()
+            dbCopyResult.text = ""
             var cfg = excelHandler.getDatabaseSettings()
             dbDriverCombo.currentIndex = (cfg.driver === "QPSQL") ? 1 : 0
             dbHostField.text = cfg.host !== undefined ? cfg.host : ""
@@ -2766,8 +3242,14 @@ ApplicationWindow {
             root.dbSetupBusy = false
         }
 
+        ScrollView {
+            id: dbSettingsScroll
+            anchors.fill: parent
+            contentWidth: availableWidth
+            clip: true
+
         ColumnLayout {
-            spacing: 16; width: parent.width
+            spacing: 16; width: dbSettingsScroll.availableWidth
 
             Label {
                 text: "All data is stored in one shared database so everyone works on the same\nnumbers. Pick ONE computer to be the server; every other computer connects to it."
@@ -2840,6 +3322,55 @@ ApplicationWindow {
 
             Label { id: dbStatusLabel; text: ""; color: "#2c3e50"; Layout.fillWidth: true; wrapMode: Text.WordWrap }
 
+            /* -------- Option 3: bring existing work onto the server -------- */
+            Rectangle {
+                Layout.fillWidth: true; radius: 6
+                color: root.dbOnServer ? "#fdf6e3" : "#f6f6f6"
+                border.color: root.dbOnServer ? "#e67e22" : "#dcdcdc"; border.width: 1
+                implicitHeight: dbCopyCol.implicitHeight + 24
+                ColumnLayout {
+                    id: dbCopyCol
+                    anchors.fill: parent; anchors.margins: 12; spacing: 8
+                    Label { text: "\u2462 Bring this computer's existing work onto the server"; font.bold: true; color: "#2c3e50" }
+                    Label {
+                        text: "Run this ONCE, on the computer that already has your stock, item master and\npurchase orders. It copies them into the shared database so every other computer\nsees them, and carries PO/GRN numbering on from where you are."
+                        color: "#7f8c8d"; font.pixelSize: 11; Layout.fillWidth: true; wrapMode: Text.WordWrap
+                    }
+                    Label {
+                        text: "Connect to the shared server above first \u2014 this step needs a server connection."
+                        visible: !root.dbOnServer
+                        color: "#c0392b"; font.pixelSize: 11; Layout.fillWidth: true; wrapMode: Text.WordWrap
+                    }
+                    Button {
+                        text: "Copy this computer's data to the server"
+                        enabled: root.dbOnServer && !root.dbSetupBusy
+                        onClicked: {
+                            var res = excelHandler.copyLocalDataToServer()
+                            dbCopyResult.text = res.message || ""
+                            dbCopyResult.isError = !res.success
+                            if (res.success) {
+                                // The stock grid and PO list are showing the
+                                // pre-copy server contents; refresh both.
+                                root.rows = excelHandler.model.rowCount()
+                                root.columns = excelHandler.model.columnCount()
+                                root.tableRefreshToken++
+                                refreshPOList()
+                                statusLabel.text = res.message
+                                statusTimer.restart()
+                            }
+                        }
+                    }
+                    Label {
+                        id: dbCopyResult
+                        property bool isError: false
+                        text: ""; visible: text !== ""
+                        color: isError ? "#c0392b" : "#1e8449"
+                        font.pixelSize: 11; font.bold: true
+                        Layout.fillWidth: true; wrapMode: Text.WordWrap
+                    }
+                }
+            }
+
             RowLayout {
                 Layout.alignment: Qt.AlignRight
                 Button { text: "Close"; enabled: !root.dbSetupBusy; onClicked: cloudSettingsDialog.close() }
@@ -2866,11 +3397,15 @@ ApplicationWindow {
                             dbStatusLabel.text = excelHandler.databaseStatus()
                             statusLabel.text = wantServer ? "Connected to shared database"
                                                           : "Using local database (this computer only)"
-                            cloudSettingsDialog.close()
+                            root.dbOnServer = excelHandler.isDatabaseServerBackend()
+                            // Stay open after joining a server so the one-time
+                            // data copy below is right where it is needed.
+                            if (!wantServer) cloudSettingsDialog.close()
                         }
                     }
                 }
             }
+        }
         }
     }
 
@@ -3037,6 +3572,8 @@ ApplicationWindow {
                     excelHandler.refreshFromDatabase()
                     rows = excelHandler.model.rowCount()
                     columns = excelHandler.model.columnCount()
+                    root.tableRefreshToken++
+                    refreshStockOverview()
                     statusLabel.text = "Refreshed from database"
                 }
                 ToolTip.visible: hovered; ToolTip.text: "Reload latest data from the shared database"
@@ -3081,6 +3618,329 @@ ApplicationWindow {
             }
         }
 
+        // ---- Headline totals ----
+        Rectangle {
+            Layout.fillWidth: true; Layout.preferredHeight: 78
+            color: "#ffffff"; border.color: "#e3e7ea"
+
+            RowLayout {
+                anchors.fill: parent; anchors.margins: 14; spacing: 28
+
+                Repeater {
+                    model: [
+                        { label: "Parts tracked", value: (root.stockTotalsData.parts || 0).toString() },
+                        { label: "Units in stock", value: groupIndianDigits(root.stockTotalsData.units || 0).replace(".00", "") },
+                        { label: "Stock value", value: formatRupees(root.stockTotalsData.value || 0) },
+                        { label: "Departments", value: (root.stockTotalsData.departments || 0).toString() }
+                    ]
+                    ColumnLayout {
+                        spacing: 2
+                        Label {
+                            text: modelData.label.toUpperCase()
+                            font.pixelSize: 10; font.letterSpacing: 0.6
+                            color: "#8a9199"
+                        }
+                        Label {
+                            text: modelData.value
+                            font.pixelSize: 22; font.bold: true
+                            color: "#1f2933"
+                        }
+                    }
+                }
+
+                Item { Layout.fillWidth: true }
+
+                Button {
+                    text: root.overviewExpanded ? "Hide breakdown" : "Show breakdown"
+                    flat: true
+                    onClicked: root.overviewExpanded = !root.overviewExpanded
+                    contentItem: Text {
+                        text: parent.text; color: "#2a78d6"; font.pixelSize: 12; font.bold: true
+                        horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter
+                    }
+                }
+            }
+        }
+
+        // ---- Department segregation + distribution ----
+        Rectangle {
+            Layout.fillWidth: true
+            Layout.preferredHeight: Math.min(340, Math.max(210,
+                                    104 + root.deptSummary.length * 32))
+            visible: root.overviewExpanded
+            color: "#ffffff"; border.color: "#e3e7ea"
+
+            RowLayout {
+                anchors.fill: parent; anchors.margins: 14; spacing: 20
+
+                // Department list: the selector, and the exact numbers behind
+                // the ring beside it.
+                ColumnLayout {
+                    Layout.fillWidth: true; Layout.fillHeight: true; spacing: 6
+
+                    RowLayout {
+                        Layout.fillWidth: true
+                        Label { text: "STOCK BY DEPARTMENT"; font.pixelSize: 10; font.letterSpacing: 0.6; color: "#8a9199" }
+                        Item { Layout.fillWidth: true }
+                        Label {
+                            text: root.selectedDepartment === ""
+                                  ? "showing all"
+                                  : "showing " + root.selectedDepartment
+                            font.pixelSize: 10; color: "#8a9199"
+                        }
+                    }
+
+                    // "All" row, then one row per department.
+                    Rectangle {
+                        Layout.fillWidth: true; Layout.preferredHeight: 30
+                        radius: 4
+                        color: root.selectedDepartment === "" ? "#eaf2fd" : (allDeptHover.hovered ? "#f4f6f8" : "transparent")
+                        border.color: root.selectedDepartment === "" ? "#2a78d6" : "transparent"
+
+                        HoverHandler { id: allDeptHover }
+                        TapHandler { onTapped: root.selectedDepartment = "" }
+
+                        RowLayout {
+                            anchors.fill: parent; anchors.leftMargin: 8; anchors.rightMargin: 8; spacing: 10
+                            Rectangle { width: 10; height: 10; radius: 2; color: "#5b6770" }
+                            Label { text: "All departments"; font.pixelSize: 12; font.bold: true; color: "#1f2933"; Layout.fillWidth: true }
+                            Label {
+                                text: (root.stockTotalsData.parts || 0) +
+                                      ((root.stockTotalsData.parts === 1) ? " part" : " parts")
+                                font.pixelSize: 11; color: "#8a9199"
+                            }
+                            Label {
+                                text: groupIndianDigits(root.stockTotalsData.units || 0).replace(".00", "")
+                                font.pixelSize: 12; font.bold: true; color: "#1f2933"
+                                Layout.preferredWidth: 70; horizontalAlignment: Text.AlignRight
+                            }
+                            Item { Layout.preferredWidth: 106 }
+                        }
+                    }
+
+                    ScrollView {
+                        Layout.fillWidth: true; Layout.fillHeight: true
+                        clip: true
+
+                        ListView {
+                            id: deptListView
+                            model: root.deptSummary
+                            spacing: 2
+                            boundsBehavior: Flickable.StopAtBounds
+
+                            delegate: Rectangle {
+                                width: deptListView.width
+                                height: 30
+                                radius: 4
+                                property bool isSelected: root.selectedDepartment === modelData.department
+                                color: isSelected ? "#eaf2fd" : (deptHover.hovered ? "#f4f6f8" : "transparent")
+                                border.color: isSelected ? "#2a78d6" : "transparent"
+
+                                HoverHandler { id: deptHover }
+                                TapHandler {
+                                    // Clicking the selected department again clears the filter.
+                                    onTapped: root.selectedDepartment =
+                                              isSelected ? "" : modelData.department
+                                }
+
+                                RowLayout {
+                                    anchors.fill: parent; anchors.leftMargin: 8; anchors.rightMargin: 8; spacing: 10
+
+                                    Rectangle {
+                                        width: 10; height: 10; radius: 2
+                                        color: root.departmentColor(modelData.colorIndex)
+                                    }
+                                    Label {
+                                        text: modelData.department
+                                        font.pixelSize: 12; color: "#1f2933"
+                                        Layout.fillWidth: true; elide: Text.ElideRight
+                                    }
+                                    Label {
+                                        text: modelData.parts + (modelData.parts === 1 ? " part" : " parts")
+                                        font.pixelSize: 11; color: "#8a9199"
+                                    }
+                                    Label {
+                                        text: groupIndianDigits(modelData.qty).replace(".00", "")
+                                        font.pixelSize: 12; font.bold: true; color: "#1f2933"
+                                        Layout.preferredWidth: 70; horizontalAlignment: Text.AlignRight
+                                    }
+                                    // Share of total units, on a single-hue track.
+                                    Rectangle {
+                                        Layout.preferredWidth: 64; Layout.preferredHeight: 6
+                                        radius: 3; color: "#eceff1"
+                                        Rectangle {
+                                            width: Math.max(2, parent.width * modelData.share)
+                                            height: parent.height; radius: 3
+                                            color: root.departmentColor(modelData.colorIndex)
+                                        }
+                                    }
+                                    Label {
+                                        text: Math.round(modelData.share * 100) + "%"
+                                        font.pixelSize: 11; color: "#5b6770"
+                                        Layout.preferredWidth: 34; horizontalAlignment: Text.AlignRight
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    Label {
+                        text: "No stock rows yet"
+                        visible: root.deptSummary.length === 0
+                        color: "#8a9199"; font.pixelSize: 11
+                    }
+                }
+
+                Rectangle { Layout.preferredWidth: 1; Layout.fillHeight: true; color: "#e3e7ea" }
+
+                // Distribution ring. Click a slice to filter, hover for the number.
+                Item {
+                    Layout.preferredWidth: 260; Layout.fillHeight: true
+
+                    Label {
+                        id: donutTitle
+                        anchors.top: parent.top; anchors.left: parent.left
+                        text: "SHARE OF UNITS"
+                        font.pixelSize: 10; font.letterSpacing: 0.6; color: "#8a9199"
+                    }
+
+                    Canvas {
+                        id: donutCanvas
+                        anchors.top: donutTitle.bottom; anchors.topMargin: 6
+                        anchors.horizontalCenter: parent.horizontalCenter
+                        width: Math.min(parent.width, parent.height - 26)
+                        height: width
+
+                        property var slices: root.donutSlices()
+                        property int hovered: -1
+                        onSlicesChanged: requestPaint()
+                        onHoveredChanged: requestPaint()
+
+                        onPaint: {
+                            var ctx = getContext("2d")
+                            ctx.reset()
+                            var cx = width / 2, cy = height / 2
+                            var outer = Math.min(cx, cy) - 2
+                            var inner = outer * 0.62
+                            var mid = (outer + inner) / 2
+
+                            var total = 0
+                            for (var i = 0; i < slices.length; i++) total += slices[i].qty
+                            if (total <= 0) {
+                                ctx.strokeStyle = "#eceff1"; ctx.lineWidth = outer - inner
+                                ctx.beginPath(); ctx.arc(cx, cy, mid, 0, Math.PI * 2); ctx.stroke()
+                                return
+                            }
+
+                            // 2px of surface between neighbouring segments, so the
+                            // ring reads as separate holdings rather than a blend.
+                            var gap = 2 / mid
+                            var angle = -Math.PI / 2
+                            for (var s = 0; s < slices.length; s++) {
+                                var sweep = (slices[s].qty / total) * Math.PI * 2
+                                var grow = (hovered === s) ? 3 : 0
+                                ctx.beginPath()
+                                ctx.strokeStyle = slices[s].color
+                                ctx.lineWidth = (outer - inner) + grow
+                                var a0 = angle + gap / 2
+                                var a1 = angle + sweep - gap / 2
+                                if (a1 > a0) {
+                                    ctx.arc(cx, cy, mid, a0, a1)
+                                    ctx.stroke()
+                                }
+                                angle += sweep
+                            }
+
+                            // Direct-label only the slices with room for it, so
+                            // the ring is readable without chasing the legend.
+                            ctx.font = "bold 11px sans-serif"
+                            ctx.textAlign = "center"
+                            ctx.textBaseline = "middle"
+                            angle = -Math.PI / 2
+                            for (var t = 0; t < slices.length; t++) {
+                                var frac = slices[t].qty / total
+                                var span = frac * Math.PI * 2
+                                if (frac >= 0.10) {
+                                    var a = angle + span / 2
+                                    ctx.fillStyle = "#ffffff"
+                                    ctx.fillText(Math.round(frac * 100) + "%",
+                                                 cx + Math.cos(a) * mid,
+                                                 cy + Math.sin(a) * mid)
+                                }
+                                angle += span
+                            }
+                        }
+
+                        MouseArea {
+                            anchors.fill: parent
+                            hoverEnabled: true
+                            onExited: donutCanvas.hovered = -1
+                            onPositionChanged: function(mouse) {
+                                var cx = width / 2, cy = height / 2
+                                var dx = mouse.x - cx, dy = mouse.y - cy
+                                var dist = Math.sqrt(dx * dx + dy * dy)
+                                var outer = Math.min(cx, cy) - 2
+                                if (dist > outer || dist < outer * 0.62) {
+                                    donutCanvas.hovered = -1
+                                    return
+                                }
+                                // Angles run clockwise from twelve o'clock.
+                                var a = Math.atan2(dy, dx) + Math.PI / 2
+                                if (a < 0) a += Math.PI * 2
+                                var total = 0
+                                for (var i = 0; i < donutCanvas.slices.length; i++)
+                                    total += donutCanvas.slices[i].qty
+                                var acc = 0
+                                for (var s = 0; s < donutCanvas.slices.length; s++) {
+                                    acc += (donutCanvas.slices[s].qty / total) * Math.PI * 2
+                                    if (a <= acc) { donutCanvas.hovered = s; return }
+                                }
+                                donutCanvas.hovered = -1
+                            }
+                            onClicked: {
+                                var h = donutCanvas.hovered
+                                if (h < 0) return
+                                var slice = donutCanvas.slices[h]
+                                if (slice.isOther) return       // a group, not a department
+                                root.selectedDepartment =
+                                    (root.selectedDepartment === slice.label) ? "" : slice.label
+                            }
+                        }
+
+                        // Centre reads the total, or the hovered slice.
+                        ColumnLayout {
+                            anchors.centerIn: parent
+                            spacing: 0
+                            width: donutCanvas.width * 0.5
+                            Label {
+                                Layout.fillWidth: true
+                                horizontalAlignment: Text.AlignHCenter
+                                text: {
+                                    var h = donutCanvas.hovered
+                                    if (h >= 0) return groupIndianDigits(donutCanvas.slices[h].qty).replace(".00", "")
+                                    return groupIndianDigits(root.stockTotalsData.units || 0).replace(".00", "")
+                                }
+                                font.pixelSize: 20; font.bold: true; color: "#1f2933"
+                                elide: Text.ElideRight
+                            }
+                            Label {
+                                Layout.fillWidth: true
+                                horizontalAlignment: Text.AlignHCenter
+                                text: {
+                                    var h = donutCanvas.hovered
+                                    if (h >= 0) return donutCanvas.slices[h].label
+                                    return "units total"
+                                }
+                                font.pixelSize: 10; color: "#8a9199"
+                                elide: Text.ElideRight
+                                wrapMode: Text.NoWrap
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
         // Column Headers (9 columns)
         Rectangle {
             id: tableHeader
@@ -3119,17 +3979,29 @@ ApplicationWindow {
 
         // Data Area
         ScrollView {
+            id: stockScroll
             Layout.fillWidth: true; Layout.fillHeight: true; clip: true
+
+            Label {
+                anchors.centerIn: parent
+                visible: root.visibleStockRows.length === 0
+                text: root.selectedDepartment === ""
+                      ? "No stock rows"
+                      : "No stock rows in " + root.selectedDepartment
+                color: "#8a9199"
+            }
 
             ListView {
                 id: tableListView
                 anchors.fill: parent
                 clip: true
-                model: root.dataRows
+                // Only the rows of the chosen department; r stays the real model
+                // row so editing, selection and delete keep working unchanged.
+                model: root.visibleStockRows.length
 
                 delegate: Row {
                     spacing: 0
-                    property int r: index + 1
+                    property int r: root.visibleStockRows[index]
 
                     Rectangle {
                         width: 40; height: 32
@@ -3182,7 +4054,11 @@ ApplicationWindow {
                                 color: enabled ? "black" : "#95a5a6"
                                 font.pixelSize: 12
                                 onEditingFinished: {
-                                    if (enabled) excelHandler.model.setDataAt(r, c, text)
+                                    if (!enabled) return
+                                    excelHandler.model.setDataAt(r, c, text)
+                                    // An edit can move a part between departments
+                                    // or change a quantity, so re-roll the totals.
+                                    refreshStockOverview()
                                 }
                             }
                         }
@@ -3238,6 +4114,11 @@ ApplicationWindow {
 
     /* ================= INITIALIZATION ================= */
 
+
+
+
+
+
     Component.onCompleted: {
         console.log("========================================")
         console.log("Enstein Stock Manager + Supply Chain Init")
@@ -3249,6 +4130,8 @@ ApplicationWindow {
         statusLabel.text = excelHandler.isDatabaseConnected()
                 ? "Ready - stock loaded from database"
                 : "Warning: database not connected"
+
+        refreshStockOverview()
 
         statusTimer.restart()
         console.log("System initialized")

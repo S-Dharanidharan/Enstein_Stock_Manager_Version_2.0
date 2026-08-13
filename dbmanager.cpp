@@ -8,6 +8,8 @@
 #include <QStandardPaths>
 #include <QDir>
 #include <QCryptographicHash>
+#include <QFileInfo>
+#include <QFile>
 #include <QDebug>
 
 namespace {
@@ -58,6 +60,235 @@ QString DatabaseManager::hashPassword(const QString &plain) const
 
 // ==================== Connection ====================
 
+QString DatabaseManager::localSqlitePath() const
+{
+    const QString dir = QStandardPaths::writableLocation(QStandardPaths::AppDataLocation);
+    return dir + "/stockmanager.db";
+}
+
+int DatabaseManager::tableRowCount(const QString &table)
+{
+    QSqlQuery q(database());
+    if (!q.exec("SELECT COUNT(*) FROM " + table) || !q.next()) return -1;
+    return q.value(0).toInt();
+}
+
+QVariantMap DatabaseManager::migrateLocalDataToServer()
+{
+    QVariantMap out;
+    out["success"] = false;
+    out["copied"] = QVariantMap();
+    out["skipped"] = QStringList();
+
+    if (!m_connected || !m_serverBackend) {
+        out["message"] = QStringLiteral(
+            "Connect to the shared server first, then copy this computer's data to it.");
+        return out;
+    }
+
+    const QString localPath = localSqlitePath();
+    if (!QFile::exists(localPath)) {
+        out["success"] = true;
+        out["message"] = QStringLiteral("Nothing to copy - this computer has no local data file.");
+        return out;
+    }
+
+    // Tables in dependency order. The id of a serial-keyed table is dropped so
+    // the server assigns its own, exactly as normal inserts do.
+    struct Copy { const char *table; bool serialId; };
+    static const QVector<Copy> kTables = {
+        {"vendors",         false},
+        {"item_master",     false},
+        {"stock_rows",      true},
+        {"purchase_orders", false},
+        {"po_items",        true},
+        {"grn_records",     false},
+        {"issue_notes",     true},
+        {"stock_movements", true},
+    };
+
+    QSqlDatabase server = database();
+    QVariantMap copied;
+    QStringList skipped;
+    QString failure;
+    int cleaned = 0;   // values the strict server could not accept as-is
+
+    const QString localConn = m_connectionName + "_localimport";
+    {
+        QSqlDatabase local = QSqlDatabase::addDatabase("QSQLITE", localConn);
+        local.setDatabaseName(localPath);
+        if (!local.open()) {
+            failure = "Could not open this computer's local data file: " + local.lastError().text();
+        } else {
+            server.transaction();
+            for (const Copy &c : kTables) {
+                if (!failure.isEmpty()) break;
+
+                const QString table = QString::fromLatin1(c.table);
+                const int existing = tableRowCount(table);
+                if (existing < 0) { failure = "Could not read " + table + " on the server"; break; }
+                // Never write into a table that already holds shared rows.
+                if (existing > 0) { skipped << table; continue; }
+
+                QSqlQuery src(local);
+                if (!src.exec("SELECT * FROM " + table)) {
+                    // A table missing locally simply has nothing to contribute.
+                    continue;
+                }
+
+                // The destination column types, used to coerce values below.
+                QSqlQuery meta(server);
+                QSqlRecord destRec;
+                if (meta.exec("SELECT * FROM " + table + " WHERE 1 = 0"))
+                    destRec = meta.record();
+
+                int rows = 0;
+                while (src.next()) {
+                    const QSqlRecord rec = src.record();
+                    QStringList cols;
+                    QStringList marks;
+                    QVariantList values;
+                    for (int i = 0; i < rec.count(); ++i) {
+                        const QString col = rec.fieldName(i);
+                        if (c.serialId && col == QLatin1String("id")) continue;
+
+                        // SQLite stores whatever was typed regardless of the
+                        // column's declared type, so old rows can hold text in
+                        // a numeric column. The server is strict, so coerce to
+                        // the destination type and drop junk to NULL rather
+                        // than letting one bad row abort the whole copy.
+                        QVariant v = rec.value(i);
+                        const int destIdx = destRec.indexOf(col);
+                        if (destIdx >= 0 && !v.isNull()) {
+                            const QMetaType destType = destRec.field(destIdx).metaType();
+                            if (destType.isValid() && v.metaType() != destType) {
+                                QVariant conv = v;
+                                if (conv.convert(destType)) {
+                                    v = conv;
+                                } else {
+                                    v = QVariant(destType);   // NULL of that type
+                                    ++cleaned;
+                                }
+                            }
+                        }
+
+                        cols << col;
+                        marks << QStringLiteral("?");
+                        values << v;
+                    }
+                    if (cols.isEmpty()) continue;
+
+                    QSqlQuery ins(server);
+                    ins.prepare("INSERT INTO " + table + " (" + cols.join(", ") +
+                                ") VALUES (" + marks.join(", ") + ")");
+                    for (const QVariant &v : values) ins.addBindValue(v);
+                    if (!ins.exec()) {
+                        failure = "Copying " + table + " failed: " + ins.lastError().text();
+                        break;
+                    }
+                    ++rows;
+                }
+                if (rows > 0) copied[table] = rows;
+            }
+
+            // Counters are raised to the local high-water mark so the next PO or
+            // GRN number continues from where this computer left off.
+            if (failure.isEmpty()) {
+                QSqlQuery src(local);
+                if (src.exec("SELECT name, value FROM counters")) {
+                    while (src.next()) {
+                        const QString name = src.value(0).toString();
+                        const int localValue = src.value(1).toInt();
+
+                        QSqlQuery cur(server);
+                        cur.prepare("SELECT value FROM counters WHERE name = ?");
+                        cur.addBindValue(name);
+                        int serverValue = 0;
+                        bool present = false;
+                        if (cur.exec() && cur.next()) {
+                            serverValue = cur.value(0).toInt();
+                            present = true;
+                        }
+                        if (present && serverValue >= localValue) continue;
+
+                        QSqlQuery up(server);
+                        if (present) {
+                            up.prepare("UPDATE counters SET value = ? WHERE name = ?");
+                            up.addBindValue(localValue);
+                            up.addBindValue(name);
+                        } else {
+                            up.prepare("INSERT INTO counters (name, value) VALUES (?, ?)");
+                            up.addBindValue(name);
+                            up.addBindValue(localValue);
+                        }
+                        if (!up.exec()) {
+                            failure = "Copying the " + name + " counter failed: " + up.lastError().text();
+                            break;
+                        }
+                        copied["counters"] = copied.value("counters").toInt() + 1;
+                    }
+                }
+            }
+
+            // Local logins are added without disturbing any that already exist
+            // on the server (the seeded admin, or accounts other people made).
+            if (failure.isEmpty()) {
+                QSqlQuery src(local);
+                if (src.exec("SELECT username, password_hash, role, display_name FROM users")) {
+                    while (src.next()) {
+                        QSqlQuery exists(server);
+                        exists.prepare("SELECT 1 FROM users WHERE username = ?");
+                        exists.addBindValue(src.value(0));
+                        if (exists.exec() && exists.next()) continue;
+
+                        QSqlQuery ins(server);
+                        ins.prepare("INSERT INTO users (username, password_hash, role, display_name) "
+                                    "VALUES (?, ?, ?, ?)");
+                        for (int i = 0; i < 4; ++i) ins.addBindValue(src.value(i));
+                        if (!ins.exec()) {
+                            failure = "Copying users failed: " + ins.lastError().text();
+                            break;
+                        }
+                        copied["users"] = copied.value("users").toInt() + 1;
+                    }
+                }
+            }
+
+            if (failure.isEmpty()) server.commit();
+            else                   server.rollback();
+
+            local.close();
+        }
+    }
+    QSqlDatabase::removeDatabase(localConn);
+
+    if (!failure.isEmpty()) {
+        setError("Copy local data to server", failure);
+        out["message"] = failure;
+        return out;
+    }
+
+    int total = 0;
+    for (auto it = copied.constBegin(); it != copied.constEnd(); ++it)
+        total += it.value().toInt();
+
+    out["success"] = true;
+    out["copied"] = copied;
+    out["skipped"] = skipped;
+    out["cleaned"] = cleaned;
+    QString message = total == 0
+        ? QStringLiteral("The server already holds data - nothing needed copying.")
+        : QStringLiteral("Copied %1 records to the server.").arg(total);
+    if (cleaned > 0) {
+        message += QStringLiteral(" %1 value(s) that were not valid numbers or dates "
+                                  "were left blank.").arg(cleaned);
+    }
+    out["message"] = message;
+    qInfo() << "[DatabaseManager] Local -> server copy:" << copied
+            << "skipped (already had rows):" << skipped;
+    return out;
+}
+
 QVariantMap DatabaseManager::connectionSettings() const
 {
     QSettings settings("EinsteinRobotics", "StockManager");
@@ -104,9 +335,8 @@ bool DatabaseManager::connectDatabase()
     if (m_driver.isEmpty()) m_driver = "QSQLITE";
 
     auto openLocalSqlite = [this]() -> bool {
-        const QString dir = QStandardPaths::writableLocation(QStandardPaths::AppDataLocation);
-        QDir().mkpath(dir);
-        const QString path = dir + "/stockmanager.db";
+        const QString path = localSqlitePath();
+        QDir().mkpath(QFileInfo(path).absolutePath());
 
         m_driver = "QSQLITE";
         QSqlDatabase db = QSqlDatabase::addDatabase("QSQLITE", m_connectionName);
@@ -227,6 +457,7 @@ bool DatabaseManager::createSchema()
         "  unit_price DOUBLE PRECISION,"
         "  total_amount DOUBLE PRECISION,"
         "  expected_date TEXT,"
+        "  expected_end_date TEXT,"
         "  status TEXT,"
         "  received_qty INTEGER,"
         "  prepared_by TEXT,"
@@ -363,6 +594,17 @@ bool DatabaseManager::migrateSchema()
         qInfo() << "[DatabaseManager] Migrated issue_notes to multi-line schema";
     }
 
+    // v2 -> v3: the expected date became a delivery period, so orders carry an
+    // end date alongside it. Existing rows keep expected_date as the start of
+    // the period and simply have no end until someone edits them.
+    if (!tableHasColumn("purchase_orders", "expected_end_date")) {
+        if (!q.exec("ALTER TABLE purchase_orders ADD COLUMN expected_end_date TEXT")) {
+            setError("Add purchase_orders.expected_end_date", q.lastError().text());
+            return false;
+        }
+        qInfo() << "[DatabaseManager] Added purchase_orders.expected_end_date";
+    }
+
     // v1 -> v2: purchase orders created before line items existed get one
     // po_items row synthesised from their header. Idempotent.
     if (!q.exec("INSERT INTO po_items (po_no, part_name, part_no, vendor, department, "
@@ -455,6 +697,7 @@ bool DatabaseManager::replaceAll(const QString &table, const QVector<QVariantMap
         db.rollback();
         return false;
     }
+    bumpDataVersion();
     return true;
 }
 
@@ -490,7 +733,10 @@ bool DatabaseManager::upsert(const QString &table, const QStringList &keyCols, c
         didUpdate = upd.numRowsAffected() > 0;
     }
 
-    if (didUpdate) return true;
+    if (didUpdate) {
+        bumpDataVersion();
+        return true;
+    }
 
     const QStringList cols = row.keys();
     QStringList placeholders;
@@ -504,6 +750,7 @@ bool DatabaseManager::upsert(const QString &table, const QStringList &keyCols, c
         setError("Insert into " + table, ins.lastError().text());
         return false;
     }
+    bumpDataVersion();
     return true;
 }
 
@@ -524,6 +771,7 @@ bool DatabaseManager::insert(const QString &table, const QVariantMap &row)
         setError("Insert into " + table, q.lastError().text());
         return false;
     }
+    bumpDataVersion();
     return true;
 }
 
@@ -539,10 +787,63 @@ bool DatabaseManager::removeRow(const QString &table, const QString &keyCol, con
         setError("Delete from " + table, q.lastError().text());
         return false;
     }
+    bumpDataVersion();
     return true;
 }
 
 // ==================== Counters ====================
+
+int DatabaseManager::dataVersion()
+{
+    QSqlDatabase db = database();
+    if (!db.isOpen()) return -1;
+
+    QSqlQuery q(db);
+    q.prepare("SELECT value FROM counters WHERE name = ?");
+    q.addBindValue(QStringLiteral("data_version"));
+    if (!q.exec() || !q.next()) return 0;
+    return q.value(0).toInt();
+}
+
+void DatabaseManager::bumpDataVersion()
+{
+    QSqlDatabase db = database();
+    if (!db.isOpen()) return;
+
+    // Written with plain queries rather than the generic helpers above, so
+    // bumping the version can never recurse into another bump.
+    QSqlQuery up(db);
+    up.prepare("UPDATE counters SET value = value + 1 WHERE name = ?");
+    up.addBindValue(QStringLiteral("data_version"));
+    if (!up.exec()) return;
+
+    if (up.numRowsAffected() <= 0) {
+        QSqlQuery ins(db);
+        ins.prepare("INSERT INTO counters (name, value) VALUES (?, ?)");
+        ins.addBindValue(QStringLiteral("data_version"));
+        ins.addBindValue(1);
+        ins.exec();
+        m_localVersion = 1;
+        return;
+    }
+    m_localVersion = dataVersion();
+}
+
+void DatabaseManager::syncVersionMark()
+{
+    m_localVersion = dataVersion();
+}
+
+bool DatabaseManager::hasRemoteChanges()
+{
+    const int current = dataVersion();
+    if (current < 0) return false;            // connection is down; nothing to do
+    if (m_localVersion < 0) {                 // first look: adopt, do not reload
+        m_localVersion = current;
+        return false;
+    }
+    return current != m_localVersion;
+}
 
 int DatabaseManager::nextCounter(const QString &name)
 {

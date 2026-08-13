@@ -54,6 +54,16 @@ public:
     // Read the currently persisted settings (for populating a settings UI).
     QVariantMap connectionSettings() const;
 
+    // One-time hand-off from single-machine storage to a shared server: copies
+    // this computer's local SQLite contents into the server it is now connected
+    // to, so the work already done here shows up on every other machine.
+    // Tables that already hold rows on the server are left untouched, so a
+    // second run (or running it on a client) can never duplicate shared data.
+    // Sequence counters are raised rather than overwritten, so PO/GRN numbering
+    // continues instead of restarting and colliding.
+    // Returns {success, message, copied:{table:rows}, skipped:[tables]}.
+    QVariantMap migrateLocalDataToServer();
+
     // ---- Generic table access (rows keyed by DB column name) ----
     QVector<QVariantMap> selectAll(const QString &table, const QString &orderBy = QString());
 
@@ -68,6 +78,15 @@ public:
     bool insert(const QString &table, const QVariantMap &row);
 
     bool removeRow(const QString &table, const QString &keyCol, const QVariant &keyVal);
+
+    // ---- Live sync across machines ----
+    // Every write bumps a single version row. Clients poll hasRemoteChanges()
+    // (one cheap SELECT) and only reload when another machine has written, so a
+    // change made anywhere shows up everywhere without hammering the server.
+    // Our own writes advance the local mark too, so we never reload our own work.
+    bool hasRemoteChanges();
+    void syncVersionMark();
+    int dataVersion();
 
     // ---- Shared sequence counters (atomic, multi-user safe) ----
     int nextCounter(const QString &name);   // returns current value, advances stored value
@@ -85,6 +104,8 @@ signals:
     void databaseError(const QString &message);
 
 private:
+    QString localSqlitePath() const;
+    int tableRowCount(const QString &table);
     bool createSchema();
     bool migrateSchema();
     bool tableHasColumn(const QString &table, const QString &column);
@@ -101,6 +122,8 @@ private:
     bool m_connected = false;
     bool m_serverBackend = false;                
     QString m_lastError;
+    void bumpDataVersion();
+    int m_localVersion = -1;   // data version as of our own last write or reload
 };
 
 #endif // DBMANAGER_H

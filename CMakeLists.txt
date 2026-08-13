@@ -66,7 +66,7 @@ qt_add_resources(EnsteinStockManager "app_assets"
 
 # ---- Windows: embedded exe icon and file/version metadata ----
 if (WIN32)
-    file(TO_CMAKE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/assets/app-icon.ico" APP_ICON_ICO)
+    file(TO_CMAKE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/assets/app-icon.ico" APP_ICON_ICO) 
     set(VER_MAJOR ${PROJECT_VERSION_MAJOR})
     set(VER_MINOR ${PROJECT_VERSION_MINOR})
     set(VER_PATCH ${PROJECT_VERSION_PATCH})
@@ -93,7 +93,7 @@ target_compile_definitions(EnsteinStockManager
     PRIVATE APP_VERSION_STR="${PROJECT_VERSION}"
 )
 
-target_link_libraries(EnsteinStockManager
+target_link_libraries(EnsteinStockManager  
     PRIVATE
         Qt6::Core
         Qt6::Gui
