@@ -4,6 +4,7 @@
 #include <QMap>
 #include <algorithm>
 #include "podocument.h"
+#include "dcdocument.h"
 #include "dbmanager.h"
 #include "serversetup.h"
 #include <QFileDialog>
@@ -57,6 +58,8 @@ const QVector<DbField> kItemFields = {
     {"required_qty", "requiredQty", 'i'},
     {"unit_price",   "unitPrice",   'd'},
     {"stock_qty",    "stockQty",    'i'},
+    {"hsn_code",     "hsnCode",     's'},
+    {"unit",         "unit",        's'},
 };
 
 const QVector<DbField> kPoFields = {
@@ -112,6 +115,63 @@ const QVector<DbField> kMovementFields = {
     {"qty",       "qty",      'i'},
     {"reference", "reference",'s'},
     {"done_by",   "doneBy",   's'},
+};
+
+const QVector<DbField> kDcFields = {
+    {"dc_no",         "dcNo",         's'},
+    {"dc_date",       "date",         's'},
+    {"delivery_time", "deliveryTime", 's'},
+    {"party_name",    "partyName",    's'},
+    {"party_address", "partyAddress", 's'},
+    {"party_phone",   "partyPhone",   's'},
+    {"party_email",   "partyEmail",   's'},
+    {"party_gstin",   "partyGstin",   's'},
+    {"ship_name",     "shipName",     's'},
+    {"ship_address",  "shipAddress",  's'},
+    {"ship_phone",    "shipPhone",    's'},
+    {"ship_email",    "shipEmail",    's'},
+    {"ship_gstin",    "shipGstin",    's'},
+    {"terms",         "terms",        's'},
+    {"status",        "status",       's'},
+    {"total_qty",     "totalQty",     'd'},
+    {"prepared_by",   "preparedBy",   's'},
+    {"delivered_by",  "deliveredBy",  's'},
+    {"received_by",   "receivedBy",   's'},
+};
+
+const QVector<DbField> kDcItemFields = {
+    {"id",        "id",       'i'},
+    {"dc_no",     "dcNo",     's'},
+    {"item_name", "itemName", 's'},
+    {"part_no",   "partNo",   's'},
+    {"hsn_code",  "hsnCode",  's'},
+    {"qty",       "qty",      'd'},
+    {"unit",      "unit",     's'},
+};
+
+const QVector<DbField> kPrFields = {
+    {"pr_no",        "prNo",        's'},
+    {"pr_date",      "date",        's'},
+    {"requested_by", "requestedBy", 's'},
+    {"department",   "department",  's'},
+    {"needed_by",    "neededBy",    's'},
+    {"priority",     "priority",    's'},
+    {"status",       "status",      's'},
+    {"remarks",      "remarks",     's'},
+    {"reviewed_by",  "reviewedBy",  's'},
+    {"review_note",  "reviewNote",  's'},
+    {"po_no",        "poNo",        's'},
+};
+
+const QVector<DbField> kPrItemFields = {
+    {"id",              "id",             'i'},
+    {"pr_no",           "prNo",           's'},
+    {"item_name",       "itemName",       's'},
+    {"part_no",         "partNo",         's'},
+    {"qty",             "qty",            'i'},
+    {"unit",            "unit",           's'},
+    {"estimated_price", "estimatedPrice", 'd'},
+    {"vendor",          "vendor",         's'},
 };
 
 const QVector<DbField> kIssueFields = {
@@ -289,7 +349,9 @@ ExcelHandler::ExcelHandler(QObject *parent)
     m_userRole("editor"),
     m_nextPONumber(1),
     m_nextGRNNumber(1),
-    m_nextIssueNumber(1)
+    m_nextIssueNumber(1),
+    m_nextDCNumber(1),
+    m_nextPRNumber(1)
 {
     connect(m_model, &QAbstractItemModel::dataChanged,
             this, &ExcelHandler::onModelDataChanged);
@@ -369,6 +431,8 @@ ExcelHandler::ExcelHandler(QObject *parent)
     loadStockMovements();
     loadIssueNotes();
     loadGRNRecords();
+    loadDeliveryChallans();
+    loadPurchaseRequests();
 
     // The stock grid also lives in the shared database. Fall back to an
     // empty default grid on a fresh database (no permanent file needed).
@@ -686,7 +750,11 @@ bool ExcelHandler::updateItemMasterDetails(QVariantMap itemDetails)
     int requiredQty = itemDetails.value("requiredQty", updated.value("requiredQty")).toInt();
     double unitPrice = itemDetails.value("unitPrice", updated.value("unitPrice")).toDouble();
     QString vendor = itemDetails.value("vendor", updated.value("vendor")).toString();
+    QString hsnCode = itemDetails.value("hsnCode", updated.value("hsnCode")).toString();
+    QString unit = itemDetails.value("unit", updated.value("unit")).toString();
 
+    updated["hsnCode"] = hsnCode;
+    updated["unit"] = unit;
     updated["partNo"] = newPartNo;
     updated["partName"] = partName;
     updated["department"] = department;
@@ -1350,6 +1418,812 @@ int ExcelHandler::pendingPOCount() const
         if (status == "draft" || status == "sent" || status == "partially received") {
             count++;
         }
+    }
+    return count;
+}
+
+// ==================== DELIVERY CHALLAN ====================
+//
+// A challan is the note that travels with goods leaving the premises. It
+// records what was handed over and to whom, and prints onto the company's
+// paper template; it deliberately does not move stock, so it can never
+// double-count against Issue Stock or a GRN.
+
+void ExcelHandler::loadDeliveryChallans()
+{
+    m_deliveryChallans.clear();
+    if (!m_db) return;
+    m_deliveryChallans = dbRowsToApp(kDcFields, m_db->selectAll("delivery_challans", "dc_no"));
+
+    for (QVariantMap &dc : m_deliveryChallans) {
+        if (dc["status"].toString().trimmed().isEmpty())
+            dc["status"] = "Draft";
+    }
+
+    loadDCItems();
+
+    qDebug() << "Loaded" << m_deliveryChallans.size() << "delivery challans ("
+             << m_dcItems.size() << "line items )";
+}
+
+void ExcelHandler::saveDeliveryChallans()
+{
+    if (!m_db) return;
+    m_db->replaceAll("delivery_challans", appRowsToDb(kDcFields, m_deliveryChallans));
+}
+
+void ExcelHandler::loadDCItems()
+{
+    m_dcItems.clear();
+    if (!m_db) return;
+    m_dcItems = dbRowsToApp(kDcItemFields, m_db->selectAll("dc_items", "id"));
+
+    for (QVariantMap &dc : m_deliveryChallans)
+        recalcDCHeader(dc);
+}
+
+void ExcelHandler::recalcDCHeader(QVariantMap &dc)
+{
+    const QString dcNo = dc["dcNo"].toString();
+    int count = 0;
+    double totalQty = 0.0;
+    QString firstItem;
+
+    for (const QVariantMap &line : m_dcItems) {
+        if (line["dcNo"].toString() != dcNo) continue;
+        if (count == 0) firstItem = line["itemName"].toString();
+        ++count;
+        totalQty += line["qty"].toDouble();
+    }
+
+    dc["itemCount"] = count;
+    dc["totalQty"]  = totalQty;
+    dc["summary"]   = (count <= 1)
+                          ? firstItem
+                          : firstItem + " +" + QString::number(count - 1) + " more";
+}
+
+// Replaces this challan's lines with the supplied ones. Serial ids are left to
+// the database, so the rows are deleted and re-inserted rather than patched.
+void ExcelHandler::saveDCItemsFor(const QString &dcNo, const QVariantList &items)
+{
+    if (!m_db) return;
+    m_db->removeRow("dc_items", "dc_no", dcNo);
+
+    for (const QVariant &v : items) {
+        QVariantMap line = v.toMap();
+        line["dcNo"] = dcNo;
+        QVariantMap dbRow = appRowToDb(kDcItemFields, line);
+        dbRow.remove("id");
+        m_db->insert("dc_items", dbRow);
+    }
+    m_dcItems = dbRowsToApp(kDcItemFields, m_db->selectAll("dc_items", "id"));
+}
+
+QString ExcelHandler::getNextDCNumber()
+{
+    int next = m_db ? m_db->peekCounter("dc") : m_nextDCNumber;
+    return "DC-" + QString::number(next).rightJustified(4, '0');
+}
+
+// Validates the lines of a challan, returning them normalised. Blank HSN codes
+// and units are filled in from the Item Master so a challan does not mean
+// retyping what the catalogue already knows.
+static bool resolveDCLines(const QVariantList &items,
+                           const QVector<QVariantMap> &itemMaster,
+                           QVariantList *out, QString *error)
+{
+    if (items.isEmpty()) {
+        *error = QStringLiteral("Add at least one item to the delivery challan");
+        return false;
+    }
+
+    for (const QVariant &v : items) {
+        QVariantMap line = v.toMap();
+        const QString itemName = line["itemName"].toString().trimmed();
+        if (itemName.isEmpty()) {
+            *error = QStringLiteral("Item Name is required for every challan line");
+            return false;
+        }
+        if (line["qty"].toDouble() <= 0.0) {
+            *error = QStringLiteral("Quantity must be greater than 0 for: ") + itemName;
+            return false;
+        }
+
+        for (const QVariantMap &item : itemMaster) {
+            if (item["partName"].toString().trimmed().compare(itemName, Qt::CaseInsensitive) != 0)
+                continue;
+            if (line["partNo"].toString().trimmed().isEmpty())
+                line["partNo"] = item["partNo"].toString().trimmed();
+            if (line["hsnCode"].toString().trimmed().isEmpty())
+                line["hsnCode"] = item["hsnCode"].toString().trimmed();
+            if (line["unit"].toString().trimmed().isEmpty())
+                line["unit"] = item["unit"].toString().trimmed();
+            break;
+        }
+
+        line["itemName"] = itemName;
+        out->append(line);
+    }
+    return true;
+}
+
+// Copies the challan fields QML supplies onto a header row, leaving anything it
+// did not send untouched (which is what makes this usable for both create and
+// edit).
+static void applyDCFields(QVariantMap &dc, const QVariantMap &challan)
+{
+    static const QStringList kEditable = {
+        "date", "deliveryTime", "partyName", "partyAddress", "partyPhone",
+        "partyEmail", "partyGstin", "shipName", "shipAddress", "shipPhone",
+        "shipEmail", "shipGstin", "terms", "preparedBy", "deliveredBy",
+        "receivedBy"
+    };
+    for (const QString &key : kEditable) {
+        if (challan.contains(key))
+            dc[key] = challan.value(key).toString().trimmed();
+    }
+}
+
+QString ExcelHandler::createDeliveryChallan(const QVariantMap &challan,
+                                            const QVariantList &items)
+{
+    if (challan.value("partyName").toString().trimmed().isEmpty()) {
+        emit errorOccurred("Party Name is required on a delivery challan");
+        return "";
+    }
+
+    // Validate every line BEFORE anything is written.
+    QVariantList lines;
+    QString error;
+    if (!resolveDCLines(items, m_itemMaster, &lines, &error)) {
+        emit errorOccurred(error);
+        return "";
+    }
+
+    // Atomic, shared challan number so concurrent users never collide.
+    int dcSeq = m_db ? m_db->nextCounter("dc") : m_nextDCNumber++;
+    const QString dcNo = "DC-" + QString::number(dcSeq).rightJustified(4, '0');
+
+    QVariantMap dc;
+    dc["dcNo"]   = dcNo;
+    dc["status"] = "Draft";
+    dc["date"]   = QDateTime::currentDateTime().toString("yyyy-MM-dd");
+    applyDCFields(dc, challan);
+    if (dc["date"].toString().trimmed().isEmpty())
+        dc["date"] = QDateTime::currentDateTime().toString("yyyy-MM-dd");
+    if (dc["preparedBy"].toString().trimmed().isEmpty())
+        dc["preparedBy"] = m_currentUser;
+    // Goods go to the party unless a different consignee was named.
+    if (dc["shipName"].toString().trimmed().isEmpty()) {
+        dc["shipName"]    = dc["partyName"];
+        dc["shipAddress"] = dc["partyAddress"];
+        dc["shipPhone"]   = dc["partyPhone"];
+        dc["shipEmail"]   = dc["partyEmail"];
+        dc["shipGstin"]   = dc["partyGstin"];
+    }
+
+    saveDCItemsFor(dcNo, lines);
+    recalcDCHeader(dc);
+    m_deliveryChallans.append(dc);
+    saveDeliveryChallans();
+
+    emit deliveryChallanListChanged();
+    emit deliveryChallanCreated(dcNo);
+
+    qDebug() << "Created delivery challan:" << dcNo << "with" << lines.size() << "items";
+    return dcNo;
+}
+
+bool ExcelHandler::updateDeliveryChallan(const QString &dcNo,
+                                         const QVariantMap &challan,
+                                         const QVariantList &items)
+{
+    int index = -1;
+    for (int i = 0; i < m_deliveryChallans.size(); ++i) {
+        if (m_deliveryChallans[i]["dcNo"].toString() == dcNo) { index = i; break; }
+    }
+    if (index == -1) {
+        emit errorOccurred("Delivery challan not found: " + dcNo);
+        return false;
+    }
+    if (m_deliveryChallans[index]["status"].toString().compare("Draft", Qt::CaseInsensitive) != 0) {
+        emit errorOccurred("Only a draft challan can be edited. " + dcNo +
+                           " has already been marked " +
+                           m_deliveryChallans[index]["status"].toString() + ".");
+        return false;
+    }
+    if (challan.contains("partyName") &&
+        challan.value("partyName").toString().trimmed().isEmpty()) {
+        emit errorOccurred("Party Name is required on a delivery challan");
+        return false;
+    }
+
+    QVariantList lines;
+    QString error;
+    if (!resolveDCLines(items, m_itemMaster, &lines, &error)) {
+        emit errorOccurred(error);
+        return false;
+    }
+
+    QVariantMap dc = m_deliveryChallans[index];
+    applyDCFields(dc, challan);
+    if (dc["shipName"].toString().trimmed().isEmpty()) {
+        dc["shipName"]    = dc["partyName"];
+        dc["shipAddress"] = dc["partyAddress"];
+        dc["shipPhone"]   = dc["partyPhone"];
+        dc["shipEmail"]   = dc["partyEmail"];
+        dc["shipGstin"]   = dc["partyGstin"];
+    }
+
+    saveDCItemsFor(dcNo, lines);
+    recalcDCHeader(dc);
+    m_deliveryChallans[index] = dc;
+    saveDeliveryChallans();
+
+    emit deliveryChallanListChanged();
+    qDebug() << "Updated delivery challan:" << dcNo;
+    return true;
+}
+
+bool ExcelHandler::deleteDeliveryChallan(const QString &dcNo)
+{
+    for (int i = 0; i < m_deliveryChallans.size(); ++i) {
+        if (m_deliveryChallans[i]["dcNo"].toString() != dcNo) continue;
+
+        m_deliveryChallans.removeAt(i);
+        saveDeliveryChallans();
+        if (m_db) {
+            m_db->removeRow("dc_items", "dc_no", dcNo);
+            m_dcItems = dbRowsToApp(kDcItemFields, m_db->selectAll("dc_items", "id"));
+        }
+        emit deliveryChallanListChanged();
+        qDebug() << "Deleted delivery challan:" << dcNo;
+        return true;
+    }
+    emit errorOccurred("Delivery challan not found: " + dcNo);
+    return false;
+}
+
+bool ExcelHandler::updateDCStatus(const QString &dcNo, const QString &newStatus)
+{
+    for (auto &dc : m_deliveryChallans) {
+        if (dc["dcNo"].toString() != dcNo) continue;
+        dc["status"] = newStatus;
+        saveDeliveryChallans();
+        emit deliveryChallanListChanged();
+        qDebug() << "Challan" << dcNo << "status ->" << newStatus;
+        return true;
+    }
+    emit errorOccurred("Delivery challan not found: " + dcNo);
+    return false;
+}
+
+QVariantList ExcelHandler::getDCList(const QString &statusFilter)
+{
+    QVariantList list;
+    // Newest first: a challan is usually raised, printed and handed over in one
+    // sitting, so the one just made belongs at the top.
+    for (int i = m_deliveryChallans.size() - 1; i >= 0; --i) {
+        const QVariantMap &dc = m_deliveryChallans[i];
+        if (statusFilter.isEmpty() ||
+            dc["status"].toString().toLower() == statusFilter.toLower()) {
+            list.append(dc);
+        }
+    }
+    return list;
+}
+
+QVariantMap ExcelHandler::getDCSearchIndex() const
+{
+    QHash<QString, QStringList> lineText;
+    for (const auto &line : m_dcItems) {
+        lineText[line["dcNo"].toString()]
+                << line["itemName"].toString() << line["partNo"].toString()
+                << line["hsnCode"].toString() << line["unit"].toString();
+    }
+
+    QVariantMap index;
+    for (const auto &dc : m_deliveryChallans) {
+        const QString dcNo = dc["dcNo"].toString();
+        QStringList fields{dcNo,
+                           dc["date"].toString(),
+                           dc["deliveryTime"].toString(),
+                           dc["partyName"].toString(),
+                           dc["partyAddress"].toString(),
+                           dc["partyGstin"].toString(),
+                           dc["shipName"].toString(),
+                           dc["shipAddress"].toString(),
+                           dc["status"].toString(),
+                           dc["preparedBy"].toString(),
+                           dc["deliveredBy"].toString(),
+                           dc["receivedBy"].toString()};
+        fields += lineText.value(dcNo);
+        index[dcNo] = fields.join(QLatin1Char(' ')).toLower();
+    }
+    return index;
+}
+
+QVariantList ExcelHandler::getDCItems(const QString &dcNo)
+{
+    QVariantList list;
+    for (const auto &line : m_dcItems) {
+        if (line["dcNo"].toString() == dcNo)
+            list.append(line);
+    }
+    return list;
+}
+
+QVariantMap ExcelHandler::getDCByNumber(const QString &dcNo)
+{
+    for (const auto &dc : m_deliveryChallans) {
+        if (dc["dcNo"].toString() == dcNo) return dc;
+    }
+    return QVariantMap();
+}
+
+QVariantList ExcelHandler::getDCPartyList() const
+{
+    QVariantList list;
+    QSet<QString> seen;
+    // Walked newest first so the most recent details for a party win.
+    for (int i = m_deliveryChallans.size() - 1; i >= 0; --i) {
+        const QVariantMap &dc = m_deliveryChallans[i];
+        const QString name = dc["partyName"].toString().trimmed();
+        if (name.isEmpty() || seen.contains(name.toLower())) continue;
+        seen.insert(name.toLower());
+
+        QVariantMap party;
+        party["partyName"]    = name;
+        party["partyAddress"] = dc["partyAddress"];
+        party["partyPhone"]   = dc["partyPhone"];
+        party["partyEmail"]   = dc["partyEmail"];
+        party["partyGstin"]   = dc["partyGstin"];
+        list.append(party);
+    }
+    return list;
+}
+
+// ---- Printable delivery challan ----
+
+QString ExcelHandler::buildDCHtml(const QString &dcNo) const
+{
+    QVariantMap dc;
+    for (const auto &row : m_deliveryChallans) {
+        if (row["dcNo"].toString() == dcNo) { dc = row; break; }
+    }
+    if (dc.isEmpty())
+        return QString();
+
+    QVariantList items;
+    for (const auto &line : m_dcItems) {
+        if (line["dcNo"].toString() == dcNo)
+            items.append(line);
+    }
+
+    return DcDocument::buildHtml(getCompanyProfile(), dc, items);
+}
+
+QString ExcelHandler::defaultDCPdfPath(const QString &dcNo) const
+{
+    const QString base = QStandardPaths::writableLocation(QStandardPaths::DocumentsLocation);
+    return base + "/Enstein Stock Manager/Delivery Challans/" + dcNo + ".pdf";
+}
+
+QVariantMap ExcelHandler::generateDCPreview(const QString &dcNo)
+{
+    const QString html = buildDCHtml(dcNo);
+    if (html.isEmpty()) {
+        emit errorOccurred("Delivery challan not found: " + dcNo);
+        return QVariantMap();
+    }
+
+    // A per-challan scratch folder, wiped first so a re-preview never shows
+    // pages left over from an earlier render.
+    const QString dir = QStandardPaths::writableLocation(QStandardPaths::TempLocation)
+                        + "/EnsteinStockManager/dc-preview/" + dcNo;
+    QDir(dir).removeRecursively();
+    QDir().mkpath(dir);
+
+    const QString pdfPath = dir + "/" + dcNo + ".pdf";
+    if (!DcDocument::writePdf(html, pdfPath)) {
+        emit errorOccurred("Could not render the delivery challan PDF");
+        return QVariantMap();
+    }
+
+    QStringList pageUrls;
+    for (const QString &f : DcDocument::renderPages(html, dir))
+        pageUrls << QUrl::fromLocalFile(f).toString();
+
+    QVariantMap result;
+    result["dcNo"]    = dcNo;
+    result["pdfPath"] = pdfPath;
+    result["pages"]   = pageUrls;
+    return result;
+}
+
+QString ExcelHandler::saveDCPdf(const QString &dcNo, const QString &destPath)
+{
+    const QString html = buildDCHtml(dcNo);
+    if (html.isEmpty()) {
+        emit errorOccurred("Delivery challan not found: " + dcNo);
+        return QString();
+    }
+
+    QString target = destPath.trimmed();
+    if (target.startsWith("file://"))
+        target = QUrl(target).toLocalFile();
+    if (target.isEmpty())
+        target = defaultDCPdfPath(dcNo);
+    if (!target.endsWith(".pdf", Qt::CaseInsensitive))
+        target += ".pdf";
+
+    if (!DcDocument::writePdf(html, target)) {
+        emit errorOccurred("Could not save the delivery challan to " + target);
+        return QString();
+    }
+    return target;
+}
+
+// ==================== PURCHASE REQUEST ====================
+//
+// A request is what someone on the floor needs bought. Everyone can see the
+// queue; the supply chain team approves or rejects, and turns an approved
+// request into a purchase order. The request keeps the order number it became,
+// so neither side of that hand-off is ever guesswork.
+
+void ExcelHandler::loadPurchaseRequests()
+{
+    m_purchaseRequests.clear();
+    if (!m_db) return;
+    m_purchaseRequests = dbRowsToApp(kPrFields, m_db->selectAll("purchase_requests", "pr_no"));
+
+    for (QVariantMap &pr : m_purchaseRequests) {
+        if (pr["status"].toString().trimmed().isEmpty())
+            pr["status"] = "Pending";
+    }
+
+    loadPRItems();
+
+    qDebug() << "Loaded" << m_purchaseRequests.size() << "purchase requests ("
+             << m_prItems.size() << "line items )";
+}
+
+void ExcelHandler::savePurchaseRequests()
+{
+    if (!m_db) return;
+    m_db->replaceAll("purchase_requests", appRowsToDb(kPrFields, m_purchaseRequests));
+}
+
+void ExcelHandler::loadPRItems()
+{
+    m_prItems.clear();
+    if (!m_db) return;
+    m_prItems = dbRowsToApp(kPrItemFields, m_db->selectAll("pr_items", "id"));
+
+    for (QVariantMap &pr : m_purchaseRequests)
+        recalcPRHeader(pr);
+}
+
+void ExcelHandler::recalcPRHeader(QVariantMap &pr)
+{
+    const QString prNo = pr["prNo"].toString();
+    int count = 0, totalQty = 0;
+    double estimatedValue = 0.0;
+    QString firstItem;
+
+    for (const QVariantMap &line : m_prItems) {
+        if (line["prNo"].toString() != prNo) continue;
+        if (count == 0) firstItem = line["itemName"].toString();
+        ++count;
+        totalQty += line["qty"].toInt();
+        estimatedValue += line["qty"].toInt() * line["estimatedPrice"].toDouble();
+    }
+
+    pr["itemCount"]      = count;
+    pr["totalQty"]       = totalQty;
+    pr["estimatedValue"] = estimatedValue;
+    pr["summary"]        = (count <= 1)
+                               ? firstItem
+                               : firstItem + " +" + QString::number(count - 1) + " more";
+}
+
+// Replaces this request's lines with the supplied ones. Serial ids are left to
+// the database, so the rows are deleted and re-inserted rather than patched.
+void ExcelHandler::savePRItemsFor(const QString &prNo, const QVariantList &items)
+{
+    if (!m_db) return;
+    m_db->removeRow("pr_items", "pr_no", prNo);
+
+    for (const QVariant &v : items) {
+        QVariantMap line = v.toMap();
+        line["prNo"] = prNo;
+        QVariantMap dbRow = appRowToDb(kPrItemFields, line);
+        dbRow.remove("id");
+        m_db->insert("pr_items", dbRow);
+    }
+    m_prItems = dbRowsToApp(kPrItemFields, m_db->selectAll("pr_items", "id"));
+}
+
+QString ExcelHandler::getNextPRNumber()
+{
+    int next = m_db ? m_db->peekCounter("pr") : m_nextPRNumber;
+    return "PR-" + QString::number(next).rightJustified(4, '0');
+}
+
+// Validates the lines of a request, returning them normalised. Blanks are
+// filled in from the Item Master so asking for a catalogued part means typing
+// its name and how many, and nothing else.
+static bool resolvePRLines(const QVariantList &items,
+                           const QVector<QVariantMap> &itemMaster,
+                           QVariantList *out, QString *error)
+{
+    if (items.isEmpty()) {
+        *error = QStringLiteral("Add at least one item to the purchase request");
+        return false;
+    }
+
+    for (const QVariant &v : items) {
+        QVariantMap line = v.toMap();
+        const QString itemName = line["itemName"].toString().trimmed();
+        if (itemName.isEmpty()) {
+            *error = QStringLiteral("Item Name is required for every requested line");
+            return false;
+        }
+        if (line["qty"].toInt() <= 0) {
+            *error = QStringLiteral("Quantity must be greater than 0 for: ") + itemName;
+            return false;
+        }
+
+        for (const QVariantMap &item : itemMaster) {
+            if (item["partName"].toString().trimmed().compare(itemName, Qt::CaseInsensitive) != 0)
+                continue;
+            if (line["partNo"].toString().trimmed().isEmpty())
+                line["partNo"] = item["partNo"].toString().trimmed();
+            if (line["unit"].toString().trimmed().isEmpty())
+                line["unit"] = item["unit"].toString().trimmed();
+            if (line["vendor"].toString().trimmed().isEmpty())
+                line["vendor"] = item["vendor"].toString().trimmed();
+            if (line["estimatedPrice"].toDouble() <= 0.0)
+                line["estimatedPrice"] = item["unitPrice"].toDouble();
+            break;
+        }
+
+        line["itemName"] = itemName;
+        out->append(line);
+    }
+    return true;
+}
+
+// Copies the request fields QML supplies onto a header row, leaving anything it
+// did not send untouched (which is what makes this usable for both create and
+// edit).
+static void applyPRFields(QVariantMap &pr, const QVariantMap &request)
+{
+    static const QStringList kEditable = {
+        "date", "requestedBy", "department", "neededBy", "priority", "remarks"
+    };
+    for (const QString &key : kEditable) {
+        if (request.contains(key))
+            pr[key] = request.value(key).toString().trimmed();
+    }
+}
+
+QString ExcelHandler::createPurchaseRequest(const QVariantMap &request,
+                                            const QVariantList &items)
+{
+    // Validate every line BEFORE anything is written.
+    QVariantList lines;
+    QString error;
+    if (!resolvePRLines(items, m_itemMaster, &lines, &error)) {
+        emit errorOccurred(error);
+        return "";
+    }
+
+    // Atomic, shared request number so concurrent users never collide.
+    int prSeq = m_db ? m_db->nextCounter("pr") : m_nextPRNumber++;
+    const QString prNo = "PR-" + QString::number(prSeq).rightJustified(4, '0');
+
+    QVariantMap pr;
+    pr["prNo"]       = prNo;
+    pr["status"]     = "Pending";
+    pr["date"]       = QDateTime::currentDateTime().toString("yyyy-MM-dd");
+    pr["priority"]   = "Normal";
+    pr["reviewedBy"] = "";
+    pr["reviewNote"] = "";
+    pr["poNo"]       = "";
+    applyPRFields(pr, request);
+    if (pr["date"].toString().trimmed().isEmpty())
+        pr["date"] = QDateTime::currentDateTime().toString("yyyy-MM-dd");
+    if (pr["requestedBy"].toString().trimmed().isEmpty())
+        pr["requestedBy"] = m_currentUser;
+    if (pr["priority"].toString().trimmed().isEmpty())
+        pr["priority"] = "Normal";
+
+    savePRItemsFor(prNo, lines);
+    recalcPRHeader(pr);
+    m_purchaseRequests.append(pr);
+    savePurchaseRequests();
+
+    emit purchaseRequestListChanged();
+    emit purchaseRequestCreated(prNo);
+
+    qDebug() << "Created purchase request:" << prNo << "with" << lines.size() << "items";
+    return prNo;
+}
+
+bool ExcelHandler::updatePurchaseRequest(const QString &prNo,
+                                         const QVariantMap &request,
+                                         const QVariantList &items)
+{
+    int index = -1;
+    for (int i = 0; i < m_purchaseRequests.size(); ++i) {
+        if (m_purchaseRequests[i]["prNo"].toString() == prNo) { index = i; break; }
+    }
+    if (index == -1) {
+        emit errorOccurred("Purchase request not found: " + prNo);
+        return false;
+    }
+    if (m_purchaseRequests[index]["status"].toString().compare("Pending", Qt::CaseInsensitive) != 0) {
+        emit errorOccurred("Only a pending request can be edited. " + prNo +
+                           " has already been " +
+                           m_purchaseRequests[index]["status"].toString().toLower() + ".");
+        return false;
+    }
+
+    QVariantList lines;
+    QString error;
+    if (!resolvePRLines(items, m_itemMaster, &lines, &error)) {
+        emit errorOccurred(error);
+        return false;
+    }
+
+    QVariantMap pr = m_purchaseRequests[index];
+    applyPRFields(pr, request);
+
+    savePRItemsFor(prNo, lines);
+    recalcPRHeader(pr);
+    m_purchaseRequests[index] = pr;
+    savePurchaseRequests();
+
+    emit purchaseRequestListChanged();
+    qDebug() << "Updated purchase request:" << prNo;
+    return true;
+}
+
+bool ExcelHandler::deletePurchaseRequest(const QString &prNo)
+{
+    for (int i = 0; i < m_purchaseRequests.size(); ++i) {
+        if (m_purchaseRequests[i]["prNo"].toString() != prNo) continue;
+
+        // A request that became an order is the paper trail behind that order,
+        // so it stays; cancel it by rejecting it instead.
+        const QString poNo = m_purchaseRequests[i]["poNo"].toString().trimmed();
+        if (!poNo.isEmpty()) {
+            emit errorOccurred(prNo + " was ordered as " + poNo +
+                               " and cannot be deleted.");
+            return false;
+        }
+
+        m_purchaseRequests.removeAt(i);
+        savePurchaseRequests();
+        if (m_db) {
+            m_db->removeRow("pr_items", "pr_no", prNo);
+            m_prItems = dbRowsToApp(kPrItemFields, m_db->selectAll("pr_items", "id"));
+        }
+        emit purchaseRequestListChanged();
+        qDebug() << "Deleted purchase request:" << prNo;
+        return true;
+    }
+    emit errorOccurred("Purchase request not found: " + prNo);
+    return false;
+}
+
+bool ExcelHandler::setPurchaseRequestStatus(const QString &prNo,
+                                            const QString &newStatus,
+                                            const QString &reviewedBy,
+                                            const QString &note)
+{
+    for (auto &pr : m_purchaseRequests) {
+        if (pr["prNo"].toString() != prNo) continue;
+
+        pr["status"] = newStatus;
+        pr["reviewedBy"] = reviewedBy.trimmed().isEmpty() ? m_currentUser : reviewedBy.trimmed();
+        if (!note.trimmed().isEmpty())
+            pr["reviewNote"] = note.trimmed();
+        savePurchaseRequests();
+        emit purchaseRequestListChanged();
+        qDebug() << "Request" << prNo << "status ->" << newStatus;
+        return true;
+    }
+    emit errorOccurred("Purchase request not found: " + prNo);
+    return false;
+}
+
+bool ExcelHandler::linkRequestToPO(const QString &prNo, const QString &poNo)
+{
+    for (auto &pr : m_purchaseRequests) {
+        if (pr["prNo"].toString() != prNo) continue;
+
+        pr["poNo"]   = poNo;
+        pr["status"] = "Ordered";
+        savePurchaseRequests();
+        emit purchaseRequestListChanged();
+        qDebug() << "Request" << prNo << "ordered as" << poNo;
+        return true;
+    }
+    emit errorOccurred("Purchase request not found: " + prNo);
+    return false;
+}
+
+QVariantList ExcelHandler::getPRList(const QString &statusFilter)
+{
+    QVariantList list;
+    // Newest first: the queue is worked from the top, and what was just asked
+    // for is what someone is waiting on.
+    for (int i = m_purchaseRequests.size() - 1; i >= 0; --i) {
+        const QVariantMap &pr = m_purchaseRequests[i];
+        if (statusFilter.isEmpty() ||
+            pr["status"].toString().toLower() == statusFilter.toLower()) {
+            list.append(pr);
+        }
+    }
+    return list;
+}
+
+QVariantMap ExcelHandler::getPRSearchIndex() const
+{
+    QHash<QString, QStringList> lineText;
+    for (const auto &line : m_prItems) {
+        lineText[line["prNo"].toString()]
+                << line["itemName"].toString() << line["partNo"].toString()
+                << line["vendor"].toString() << line["unit"].toString();
+    }
+
+    QVariantMap index;
+    for (const auto &pr : m_purchaseRequests) {
+        const QString prNo = pr["prNo"].toString();
+        QStringList fields{prNo,
+                           pr["date"].toString(),
+                           pr["requestedBy"].toString(),
+                           pr["department"].toString(),
+                           pr["neededBy"].toString(),
+                           pr["priority"].toString(),
+                           pr["status"].toString(),
+                           pr["remarks"].toString(),
+                           pr["reviewedBy"].toString(),
+                           pr["reviewNote"].toString(),
+                           pr["poNo"].toString()};
+        fields += lineText.value(prNo);
+        index[prNo] = fields.join(QLatin1Char(' ')).toLower();
+    }
+    return index;
+}
+
+QVariantList ExcelHandler::getPRItems(const QString &prNo)
+{
+    QVariantList list;
+    for (const auto &line : m_prItems) {
+        if (line["prNo"].toString() == prNo)
+            list.append(line);
+    }
+    return list;
+}
+
+QVariantMap ExcelHandler::getPRByNumber(const QString &prNo)
+{
+    for (const auto &pr : m_purchaseRequests) {
+        if (pr["prNo"].toString() == prNo) return pr;
+    }
+    return QVariantMap();
+}
+
+int ExcelHandler::pendingRequestCount() const
+{
+    int count = 0;
+    for (const auto &pr : m_purchaseRequests) {
+        if (pr["status"].toString().compare("Pending", Qt::CaseInsensitive) == 0)
+            ++count;
     }
     return count;
 }
@@ -3289,10 +4163,14 @@ void ExcelHandler::refreshFromDatabase()
     loadStockMovements();
     loadIssueNotes();
     loadGRNRecords();
+    loadDeliveryChallans();
+    loadPurchaseRequests();
     loadStockFromDb();
 
     emit vendorListChanged();
     emit itemMasterListChanged();
+    emit deliveryChallanListChanged();
+    emit purchaseRequestListChanged();
     emit pendingPOCountChanged();
     emit lowStockCountChanged();
 }

@@ -53,6 +53,10 @@ qt_add_qml_module(EnsteinStockManager
         serversetup.cpp
         podocument.h
         podocument.cpp
+        docrender.h
+        docrender.cpp
+        dcdocument.h
+        dcdocument.cpp
 )
 
 # Compile the window icon into the binary so it is present no matter how the

@@ -27,10 +27,10 @@ DatabaseManager::~DatabaseManager()
 {
     if (QSqlDatabase::contains(m_connectionName)) {
         {
-            QSqlDatabase db = QSqlDatabase::database(m_connectionName, false);
+            QSqlDatabase db = QSqlDatabase::database(m_connectionName, false);            
             if (db.isOpen()) db.close();
         }
-        QSqlDatabase::removeDatabase(m_connectionName);
+        QSqlDatabase::removeDatabase(m_connectionName);                              
     }
 }
 
@@ -105,6 +105,10 @@ QVariantMap DatabaseManager::migrateLocalDataToServer()
         {"grn_records",     false},
         {"issue_notes",     true},
         {"stock_movements", true},
+        {"delivery_challans", false},
+        {"dc_items",        true},
+        {"purchase_requests", false},
+        {"pr_items",        true},
     };
 
     QSqlDatabase server = database();
@@ -523,7 +527,70 @@ bool DatabaseManager::createSchema()
         "  part_name TEXT,"
         "  qty INTEGER,"
         "  department TEXT,"
-        "  issued_by TEXT)"
+        "  issued_by TEXT)",
+
+        // Delivery challans accompany goods leaving the premises. The party and
+        // shipping details are stored on the challan itself rather than looked
+        // up, because a challan must keep printing exactly what was handed over
+        // even after the party's address later changes.
+        "CREATE TABLE IF NOT EXISTS delivery_challans ("
+        "  dc_no TEXT PRIMARY KEY,"
+        "  dc_date TEXT,"
+        "  delivery_time TEXT,"
+        "  party_name TEXT,"
+        "  party_address TEXT,"
+        "  party_phone TEXT,"
+        "  party_email TEXT,"
+        "  party_gstin TEXT,"
+        "  ship_name TEXT,"
+        "  ship_address TEXT,"
+        "  ship_phone TEXT,"
+        "  ship_email TEXT,"
+        "  ship_gstin TEXT,"
+        "  terms TEXT,"
+        "  status TEXT,"
+        "  total_qty DOUBLE PRECISION,"
+        "  prepared_by TEXT,"
+        "  delivered_by TEXT,"
+        "  received_by TEXT)",
+
+        // Line items of a delivery challan.
+        "CREATE TABLE IF NOT EXISTS dc_items ("
+        "  id " + serialPk + ","
+        "  dc_no TEXT,"
+        "  item_name TEXT,"
+        "  part_no TEXT,"
+        "  hsn_code TEXT,"
+        "  qty DOUBLE PRECISION,"
+        "  unit TEXT)",
+
+        // Purchase requests: anyone on the floor asks for what they need to
+        // buy, and the supply chain team turns an approved request into a
+        // purchase order. po_no records which order it became, so the request
+        // and the order can always be traced back to each other.
+        "CREATE TABLE IF NOT EXISTS purchase_requests ("
+        "  pr_no TEXT PRIMARY KEY,"
+        "  pr_date TEXT,"
+        "  requested_by TEXT,"
+        "  department TEXT,"
+        "  needed_by TEXT,"
+        "  priority TEXT,"
+        "  status TEXT,"
+        "  remarks TEXT,"
+        "  reviewed_by TEXT,"
+        "  review_note TEXT,"
+        "  po_no TEXT)",
+
+        // Line items of a purchase request.
+        "CREATE TABLE IF NOT EXISTS pr_items ("
+        "  id " + serialPk + ","
+        "  pr_no TEXT,"
+        "  item_name TEXT,"
+        "  part_no TEXT,"
+        "  qty INTEGER,"
+        "  unit TEXT,"
+        "  estimated_price DOUBLE PRECISION,"
+        "  vendor TEXT)"
     };
 
     for (const QString &stmt : ddl) {
@@ -603,6 +670,19 @@ bool DatabaseManager::migrateSchema()
             return false;
         }
         qInfo() << "[DatabaseManager] Added purchase_orders.expected_end_date";
+    }
+
+    // v3 -> v4: delivery challans print an HSN/SAC code and a unit of measure
+    // per line, so the item master carries both and the challan autofills them.
+    for (const char *column : {"hsn_code", "unit"}) {
+        if (tableHasColumn("item_master", column)) continue;
+        if (!q.exec(QStringLiteral("ALTER TABLE item_master ADD COLUMN %1 TEXT")
+                        .arg(QLatin1String(column)))) {
+            setError(QStringLiteral("Add item_master.%1").arg(QLatin1String(column)),
+                     q.lastError().text());
+            return false;
+        }
+        qInfo() << "[DatabaseManager] Added item_master." << column;
     }
 
     // v1 -> v2: purchase orders created before line items existed get one

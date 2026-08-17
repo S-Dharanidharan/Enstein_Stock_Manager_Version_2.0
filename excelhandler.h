@@ -72,6 +72,7 @@ class ExcelHandler : public QObject
     // Supply Chain Properties
     Q_PROPERTY(int lowStockCount READ lowStockCount NOTIFY lowStockCountChanged)
     Q_PROPERTY(int pendingPOCount READ pendingPOCount NOTIFY pendingPOCountChanged)
+    Q_PROPERTY(int pendingRequestCount READ pendingRequestCount NOTIFY purchaseRequestListChanged)
     Q_PROPERTY(int totalVendors READ totalVendors NOTIFY vendorListChanged)
 
 public:
@@ -254,6 +255,77 @@ public:
     Q_INVOKABLE bool openInSystemViewer(const QString &path);
     int pendingPOCount() const;
 
+    // ---- Delivery Challan (DC) ----
+    // The note that travels with goods leaving the premises. It is a document
+    // only: stock is not moved by raising one, because what leaves the shelf is
+    // already accounted for by Issue Stock and the GRN trail.
+    //
+    // challan: partyName, partyAddress, partyPhone, partyEmail, partyGstin,
+    //          shipName, shipAddress, shipPhone, shipEmail, shipGstin,
+    //          date, deliveryTime, terms, preparedBy, deliveredBy, receivedBy
+    // items:   list of maps {itemName, partNo, hsnCode, qty, unit}
+    Q_INVOKABLE QString createDeliveryChallan(const QVariantMap &challan,
+                                              const QVariantList &items);
+    // Rewrites a challan and its lines. Only a Draft may be changed, so a
+    // challan that has already travelled with the goods can never be rewritten.
+    Q_INVOKABLE bool updateDeliveryChallan(const QString &dcNo,
+                                           const QVariantMap &challan,
+                                           const QVariantList &items);
+    Q_INVOKABLE bool deleteDeliveryChallan(const QString &dcNo);
+    Q_INVOKABLE bool updateDCStatus(const QString &dcNo, const QString &newStatus);
+    Q_INVOKABLE QVariantList getDCList(const QString &statusFilter = "");
+    // dcNo -> one lowercase blob of everything the challan list can be searched
+    // by, including the line items the "+N more" row label hides.
+    Q_INVOKABLE QVariantMap getDCSearchIndex() const;
+    Q_INVOKABLE QVariantList getDCItems(const QString &dcNo);
+    Q_INVOKABLE QVariantMap getDCByNumber(const QString &dcNo);
+    Q_INVOKABLE QString getNextDCNumber();
+    // Parties delivered to before, most recent first, so a repeat delivery does
+    // not mean retyping an address.
+    Q_INVOKABLE QVariantList getDCPartyList() const;
+
+    // Renders the challan to a PDF in a temp folder and rasterises its pages
+    // for the preview dialog. Returns { dcNo, pdfPath, pages: [image urls] },
+    // or an empty map if the challan could not be found or rendered.
+    Q_INVOKABLE QVariantMap generateDCPreview(const QString &dcNo);
+    // Writes the challan PDF to its permanent home. An empty destPath uses
+    // defaultDCPdfPath(). Returns the saved path, or "" on failure.
+    Q_INVOKABLE QString saveDCPdf(const QString &dcNo,
+                                  const QString &destPath = QString());
+    Q_INVOKABLE QString defaultDCPdfPath(const QString &dcNo) const;
+
+    // ---- Purchase Request (PR) ----
+    // What anyone on the floor needs bought. Requests are visible to everyone;
+    // the supply chain team reviews them and turns an approved one into a
+    // purchase order, which links the two together for good.
+    //
+    // request: department, neededBy, priority, remarks, requestedBy
+    // items:   list of maps {itemName, partNo, qty, unit, estimatedPrice, vendor}
+    Q_INVOKABLE QString createPurchaseRequest(const QVariantMap &request,
+                                              const QVariantList &items);
+    // Rewrites a request and its lines. Only a Pending request may be changed,
+    // so nothing shifts under a reviewer after they have acted on it.
+    Q_INVOKABLE bool updatePurchaseRequest(const QString &prNo,
+                                           const QVariantMap &request,
+                                           const QVariantList &items);
+    Q_INVOKABLE bool deletePurchaseRequest(const QString &prNo);
+    // Approve or reject a request, recording who decided and why.
+    Q_INVOKABLE bool setPurchaseRequestStatus(const QString &prNo,
+                                              const QString &newStatus,
+                                              const QString &reviewedBy = QString(),
+                                              const QString &note = QString());
+    // Records that prNo was ordered as poNo. Called once the order exists, so a
+    // failed order never leaves a request marked as bought.
+    Q_INVOKABLE bool linkRequestToPO(const QString &prNo, const QString &poNo);
+    Q_INVOKABLE QVariantList getPRList(const QString &statusFilter = "");
+    // prNo -> one lowercase blob of everything the request list can be searched
+    // by, including the line items the "+N more" row label hides.
+    Q_INVOKABLE QVariantMap getPRSearchIndex() const;
+    Q_INVOKABLE QVariantList getPRItems(const QString &prNo);
+    Q_INVOKABLE QVariantMap getPRByNumber(const QString &prNo);
+    Q_INVOKABLE QString getNextPRNumber();
+    int pendingRequestCount() const;
+
     // ---- Goods Receipt Note (GRN) ----
     // Receive against a specific PO line item (multi-item POs).
     Q_INVOKABLE QString receiveGoodsForItem(int itemId,
@@ -321,6 +393,10 @@ signals:
     void vendorListChanged();
     void itemMasterListChanged();
     void purchaseOrderCreated(const QString &poNo);
+    void deliveryChallanCreated(const QString &dcNo);
+    void deliveryChallanListChanged();
+    void purchaseRequestCreated(const QString &prNo);
+    void purchaseRequestListChanged();
     void goodsReceived(const QString &grnNo, const QString &poNo);
     void stockIssued(const QString &issueNo, const QString &partName, int qty);
     void movementLogged(const QString &partName, const QString &type, int qty);
@@ -355,11 +431,17 @@ private:
     QVector<QVariantMap> m_stockMovements;
     QVector<QVariantMap> m_issueNotes;
     QVector<QVariantMap> m_grnRecords;
-    
+    QVector<QVariantMap> m_deliveryChallans;
+    QVector<QVariantMap> m_dcItems;        // line items of all challans
+    QVector<QVariantMap> m_purchaseRequests;
+    QVector<QVariantMap> m_prItems;        // line items of all requests
+
     // Counters
     int m_nextPONumber;
     int m_nextGRNNumber;
     int m_nextIssueNumber;
+    int m_nextDCNumber;
+    int m_nextPRNumber;
 
     // Supply Chain file paths
     QString m_dataDir;
@@ -406,6 +488,23 @@ private:
     // an error emitted when validation fails.
     bool resolvePOLine(QVariantMap &line);
     QString buildPOHtml(const QString &poNo, const QString &comments) const;
+    void loadDeliveryChallans();
+    void saveDeliveryChallans();
+    void loadDCItems();
+    // Recomputes a challan header's line count, total quantity and row label
+    // from its lines.
+    void recalcDCHeader(QVariantMap &dc);
+    // Writes one challan's lines, replacing whatever it had before.
+    void saveDCItemsFor(const QString &dcNo, const QVariantList &items);
+    QString buildDCHtml(const QString &dcNo) const;
+    void loadPurchaseRequests();
+    void savePurchaseRequests();
+    void loadPRItems();
+    // Recomputes a request header's line count, quantity, estimated value and
+    // row label from its lines.
+    void recalcPRHeader(QVariantMap &pr);
+    // Writes one request's lines, replacing whatever it had before.
+    void savePRItemsFor(const QString &prNo, const QVariantList &items);
     void loadStockMovements();
     void saveStockMovements();
     void loadIssueNotes();
