@@ -1,4 +1,4 @@
-#include "serversetup.h"
+#include "core/serversetup.h"
 
 #include <QFile>
 #include <QHostAddress>

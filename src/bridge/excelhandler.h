@@ -16,39 +16,25 @@
 #include <QDateTime>
 #include <QSet>
 #include <QTimer>
-#include <xlsxdocument.h>
-#include <xlsxworksheet.h>
 
+#include "models/exceltablemodel.h"
+
+#include "domain/service.h"
+
+class Counters;
+class Session;
 class DatabaseManager;
 class ServerSetup;
-
-// ==================== ExcelTableModel ====================
-class ExcelTableModel : public QAbstractTableModel
-{
-    Q_OBJECT
-public:
-    explicit ExcelTableModel(QObject *parent = nullptr);
-
-    int rowCount(const QModelIndex &parent = QModelIndex()) const override;
-    int columnCount(const QModelIndex &parent = QModelIndex()) const override;
-    QVariant data(const QModelIndex &index, int role = Qt::DisplayRole) const override;
-    bool setData(const QModelIndex &index, const QVariant &value, int role = Qt::EditRole) override;
-    Qt::ItemFlags flags(const QModelIndex &index) const override;
-    QHash<int, QByteArray> roleNames() const override;
-
-    void setExcelData(const QVector<QVector<QVariant>> &data);
-    QVector<QVector<QVariant>> getExcelData() const;
-
-    Q_INVOKABLE QVariant getData(int row, int column) const;
-    Q_INVOKABLE bool setDataAt(int row, int column, const QVariant &value);
-    Q_INVOKABLE void addRow();
-    Q_INVOKABLE bool removeRowAt(int row);
-    Q_INVOKABLE void addColumn();
-    Q_INVOKABLE void clear();
-
-private:
-    QVector<QVector<QVariant>> m_data;
-};
+class VendorService;
+class ItemMasterService;
+class DeliveryChallanService;
+class PurchaseRequestService;
+class StockMovementService;
+class StockService;
+class MaterialIssueService;
+class PurchaseOrderService;
+class GoodsReceiptService;
+class LowStockService;
 
 // ==================== ExcelHandler ====================
 class ExcelHandler : public QObject
@@ -77,6 +63,7 @@ class ExcelHandler : public QObject
 
 public:
     explicit ExcelHandler(QObject *parent = nullptr);
+    ~ExcelHandler() override;
 
     ExcelTableModel* model() const { return m_model; }
     QString currentFile() const { return m_currentFile; }
@@ -182,8 +169,8 @@ public:
     bool syncEnabled() const { return m_syncEnabled; }
     QString lastSyncTime() const { return m_lastSyncTime; }
     QString syncStatus() const { return m_syncStatus; }
-    QString currentUser() const { return m_currentUser; }
-    QString userRole() const { return m_userRole; }
+    QString currentUser() const;
+    QString userRole() const;
 
     // ==================== SUPPLY CHAIN METHODS ====================
 
@@ -195,7 +182,7 @@ public:
     Q_INVOKABLE QVariantList getVendorList();
     Q_INVOKABLE QStringList getVendorNames();
     Q_INVOKABLE QVariantMap getVendorByName(const QString &name);
-    int totalVendors() const { return m_vendors.size(); }
+    int totalVendors() const;
     
     // ---- Item Master Management ----
     Q_INVOKABLE bool addItemMasterDetails(QVariantMap itemDetails);
@@ -409,6 +396,24 @@ private slots:
 private:
     DatabaseManager *m_db;
     ServerSetup *m_serverSetup;
+    // Owned. Held by pointer so the header need not see their
+    // definitions; released in the destructor.
+    Counters *m_counters;
+    Session *m_session;
+
+    // ---- Domain services ------------------------------------------------
+    // Each owns one area of the business and its rows; the methods above are
+    // thin delegations onto them. See docs/ARCHITECTURE.md.
+    VendorService *m_vendors;
+    ItemMasterService *m_items;
+    DeliveryChallanService *m_challans;
+    PurchaseRequestService *m_requests;
+    StockMovementService *m_movements;
+    StockService *m_stock;
+    MaterialIssueService *m_issues;
+    PurchaseOrderService *m_orders;
+    GoodsReceiptService *m_grn;
+    LowStockService *m_lowStock;
     ExcelTableModel *m_model;
     QString m_currentFile;
     QString m_permanentFile;
@@ -420,21 +425,8 @@ private:
     bool m_syncEnabled;
     QString m_lastSyncTime;
     QString m_syncStatus;
-    QString m_currentUser;
-    QString m_userRole;
 
     // Supply Chain Data (in-memory caches of the database tables)
-    QVector<QVariantMap> m_vendors;
-    QVector<QVariantMap> m_itemMaster;
-    QVector<QVariantMap> m_purchaseOrders;
-    QVector<QVariantMap> m_poItems;        // line items of all POs
-    QVector<QVariantMap> m_stockMovements;
-    QVector<QVariantMap> m_issueNotes;
-    QVector<QVariantMap> m_grnRecords;
-    QVector<QVariantMap> m_deliveryChallans;
-    QVector<QVariantMap> m_dcItems;        // line items of all challans
-    QVector<QVariantMap> m_purchaseRequests;
-    QVector<QVariantMap> m_prItems;        // line items of all requests
 
     // Counters
     int m_nextPONumber;
@@ -471,49 +463,16 @@ private:
 
     // Supply Chain helpers
     void initializeDataDirectory();
-    void loadVendors();
-    bool saveVendors();
-    void loadItemMaster();
-    void saveItemMaster();
 
-    void loadPurchaseOrders();
-    void savePurchaseOrders();
-    void loadPOItems();
     // Stock grid persistence in the shared database.
-    bool loadStockFromDb();
-    void saveStockToDb();
-    // Recomputes a PO header's qty/total/received/summary from its lines.
-    void recalcPOHeader(QVariantMap &po);
-    // Resolves blanks in a PO line from the item master; returns false with
-    // an error emitted when validation fails.
-    bool resolvePOLine(QVariantMap &line);
-    QString buildPOHtml(const QString &poNo, const QString &comments) const;
-    void loadDeliveryChallans();
-    void saveDeliveryChallans();
-    void loadDCItems();
     // Recomputes a challan header's line count, total quantity and row label
     // from its lines.
-    void recalcDCHeader(QVariantMap &dc);
     // Writes one challan's lines, replacing whatever it had before.
-    void saveDCItemsFor(const QString &dcNo, const QVariantList &items);
-    QString buildDCHtml(const QString &dcNo) const;
-    void loadPurchaseRequests();
-    void savePurchaseRequests();
-    void loadPRItems();
     // Recomputes a request header's line count, quantity, estimated value and
     // row label from its lines.
-    void recalcPRHeader(QVariantMap &pr);
     // Writes one request's lines, replacing whatever it had before.
-    void savePRItemsFor(const QString &prNo, const QVariantList &items);
-    void loadStockMovements();
-    void saveStockMovements();
-    void loadIssueNotes();
-    void saveIssueNotes();
-    void loadGRNRecords();
-    void saveGRNRecords();
     void loadSupplyChainCounters();
     void saveSupplyChainCounters();
-    int findPartRowByName(const QString &partName);
 };
 
 #endif // EXCELHANDLER_H

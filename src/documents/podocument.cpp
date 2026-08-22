@@ -1,5 +1,5 @@
-#include "podocument.h"
-#include "docrender.h"
+#include "documents/podocument.h"
+#include "documents/docrender.h"
 
 #include <QLocale>
 

@@ -3,7 +3,7 @@
 #include <QUrl>
 #include <QIcon>
 #include <QFile>
-#include "excelhandler.h"
+#include "bridge/excelhandler.h"
 
 #ifndef APP_VERSION_STR
 #define APP_VERSION_STR "2.1.4"
@@ -31,7 +31,20 @@ int main(int argc, char *argv[])
     QCoreApplication::setApplicationName("Enstein Stock Manager");
     QCoreApplication::setApplicationVersion(QStringLiteral(APP_VERSION_STR));
 
-    qmlRegisterType<ExcelHandler>("ExcelHandler", 1, 0, "ExcelHandler");
+    // The backend is exposed to QML as one singleton named `Backend`, rather
+    // than as a type the UI instantiates. Two reasons:
+    //
+    //   - There is only ever one of it. It owns the database connection and
+    //     every in-memory cache, so a second instance would be a second,
+    //     disagreeing copy of the application's state.
+    //   - A singleton is reachable from every .qml file. An object declared in
+    //     Main.qml would only be visible inside Main.qml, which is what forces
+    //     a QML application into one enormous file.
+    //
+    // Everything callable on it is the frontend contract; see
+    // docs/QML_API_REFERENCE.md.
+    ExcelHandler backend;
+    qmlRegisterSingletonInstance("ExcelHandler", 1, 0, "Backend", &backend);
 
     QQmlApplicationEngine engine;
     engine.load(QUrl(QStringLiteral("qrc:/Enstein/Main.qml")));

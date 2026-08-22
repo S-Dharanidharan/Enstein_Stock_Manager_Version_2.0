@@ -1,4 +1,4 @@
-#include "docrender.h"
+#include "documents/docrender.h"
 
 #include <QTextDocument>
 #include <QAbstractTextDocumentLayout>

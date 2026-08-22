@@ -3,6 +3,7 @@ import QtQuick.Controls 2.15
 import QtQuick.Layouts 1.15
 import QtQuick.Controls.Basic 6.3 as BasicControls
 import ExcelHandler 1.0
+import Enstein
 
 ApplicationWindow {
     id: root
@@ -42,9 +43,9 @@ ApplicationWindow {
     }
 
     function refreshStockOverview() {
-        deptSummary = excelHandler.departmentStockSummary()
-        stockTotalsData = excelHandler.stockTotals()
-        visibleStockRows = excelHandler.stockRowsForDepartment(selectedDepartment)
+        deptSummary = Backend.departmentStockSummary()
+        stockTotalsData = Backend.stockTotals()
+        visibleStockRows = Backend.stockRowsForDepartment(selectedDepartment)
     }
 
     // The slices actually drawn: the biggest holdings keep their own colour and
@@ -90,48 +91,56 @@ ApplicationWindow {
 
     title: {
         var fileName = "Untitled"
-        if (excelHandler.currentFile !== "") {
-            var parts = excelHandler.currentFile.split("/")
+        if (Backend.currentFile !== "") {
+            var parts = Backend.currentFile.split("/")
             fileName = parts[parts.length - 1]
         }
         return "Enstein Stock Manager - " + fileName +
-               (excelHandler.hasUnsavedChanges ? " *" : "") +
+               (Backend.hasUnsavedChanges ? " *" : "") +
                (loginDialog.isAuthenticated ? " [Logged In]" : " [Read-Only]")
     }
 
-    ExcelHandler {
-        id: excelHandler
+    // Dialogs live in their own files and cannot see this window's id, so the
+    // size they need to fit inside is published through the App singleton.
+    Binding { target: App; property: "windowWidth";  value: root.width }
+    Binding { target: App; property: "windowHeight"; value: root.height }
 
-        onErrorOccurred: function(error) {
+    // Everything the backend announces, in one place. A screen that needs to
+    // react to a change listens here rather than polling for it.
+    Connections {
+        target: Backend
+
+
+        function onErrorOccurred(error) {
             errorDialog.errorText = error
             errorDialog.open()
         }
 
-        onFileLoaded: function(fileName) {
+        function onFileLoaded(fileName) {
             statusLabel.text = "Loaded: " + fileName
             root.tableRefreshToken++
             statusTimer.restart()
         }
 
-        onFileSaved: function(fileName) {
+        function onFileSaved(fileName) {
             statusLabel.text = "Saved: " + fileName
             statusTimer.restart()
         }
 
-        onFileMerged: function(fileName, rowsAdded, rowsUpdated) {
+        function onFileMerged(fileName, rowsAdded, rowsUpdated) {
             statusLabel.text = "Merged - Added: " + rowsAdded + ", Updated: " + rowsUpdated
             root.tableRefreshToken++
             statusTimer.restart()
         }
 
-        onSearchResultFound: function(row) {
+        function onSearchResultFound(row) {
             root.selectedRow = row
         }
 
         // Another machine changed the shared data; it has already been reloaded.
-        onSharedDataChanged: {
-            root.rows = excelHandler.model.rowCount()
-            root.columns = excelHandler.model.columnCount()
+        function onSharedDataChanged() {
+            root.rows = Backend.model.rowCount()
+            root.columns = Backend.model.columnCount()
             root.tableRefreshToken++
             refreshStockOverview()
             refreshPOList()
@@ -141,52 +150,52 @@ ApplicationWindow {
             statusTimer.restart()
         }
 
-        onPurchaseOrderCreated: function(poNo) {
+        function onPurchaseOrderCreated(poNo) {
             statusLabel.text = "PO Created: " + poNo
             statusTimer.restart()
         }
 
-        onDeliveryChallanCreated: function(dcNo) {
+        function onDeliveryChallanCreated(dcNo) {
             statusLabel.text = "Delivery Challan Created: " + dcNo
             statusTimer.restart()
         }
 
-        onDeliveryChallanListChanged: {
+        function onDeliveryChallanListChanged() {
             if (dcDialog.visible) refreshDCList()
         }
 
-        onPurchaseRequestCreated: function(prNo) {
+        function onPurchaseRequestCreated(prNo) {
             statusLabel.text = "Purchase Request raised: " + prNo
             statusTimer.restart()
         }
 
-        onPurchaseRequestListChanged: {
+        function onPurchaseRequestListChanged() {
             if (prDialog.visible) refreshPRList()
         }
 
-        onGoodsReceived: function(grnNo, poNo) {
+        function onGoodsReceived(grnNo, poNo) {
             statusLabel.text = "GRN " + grnNo + " received for " + poNo
-            rows = excelHandler.model.rowCount()
+            rows = Backend.model.rowCount()
             root.tableRefreshToken++
             refreshPOList()
             refreshMovements()
             statusTimer.restart()
         }
 
-        onStockIssued: function(issueNo, partName, qty) {
+        function onStockIssued(issueNo, partName, qty) {
             statusLabel.text = "Issued: " + partName + " x" + qty + " (" + issueNo + ")"
-            rows = excelHandler.model.rowCount()
+            rows = Backend.model.rowCount()
             root.tableRefreshToken++
             refreshMovements()
             refreshIssuePartDropdown()
             statusTimer.restart()
         }
 
-        onServerProvisionProgress: function(message) {
+        function onServerProvisionProgress(message) {
             dbStatusLabel.text = message
         }
 
-        onServerProvisionFinished: function(success, result) {
+        function onServerProvisionFinished(success, result) {
             root.dbSetupBusy = false
             if (success) {
                 // Show the admin exactly what to type into every other
@@ -199,7 +208,7 @@ ApplicationWindow {
                 dbUserField.text = result.user !== undefined ? result.user : ""
                 dbPassField.text = result.password !== undefined ? result.password : ""
                 serverInfoBox.visible = true
-                dbStatusLabel.text = excelHandler.databaseStatus()
+                dbStatusLabel.text = Backend.databaseStatus()
                 statusLabel.text = "This computer is now the shared database server"
             } else {
                 dbStatusLabel.text = "Server setup failed: " +
@@ -210,72 +219,25 @@ ApplicationWindow {
 
     /* ================= COMMON DIALOGS ================= */
 
-    Dialog {
-        id: errorDialog
-        title: "Error"
-        modal: true
-        standardButtons: Dialog.Ok
-        anchors.centerIn: parent
-        width: 400
-        property alias errorText: errorLabel.text
-        Label { id: errorLabel; wrapMode: Text.WordWrap; width: parent.width }
-    }
+    ErrorDialog { id: errorDialog }
 
     /* ================= LOGIN DIALOG ================= */
 
-    Dialog {
-        id: loginDialog
-        title: "Authorization Required"
-        modal: true
-        standardButtons: Dialog.Ok | Dialog.Cancel
-        anchors.centerIn: parent
-        property bool isAuthenticated: false
-
-        ColumnLayout {
-            spacing: 15
-            Label { text: "Enter credentials to enable editing"; font.bold: true; font.pixelSize: 14 }
-            Label { text: "Username:" }
-            TextField { id: usernameField; placeholderText: "admin"; Layout.fillWidth: true; selectByMouse: true }
-            Label { text: "Password:" }
-            TextField {
-                id: passwordField; placeholderText: "password"; echoMode: TextInput.Password
-                Layout.fillWidth: true; selectByMouse: true
-                Keys.onReturnPressed: loginDialog.accept()
-            }
-            Label { id: loginError; text: ""; color: "#e74c3c"; visible: text !== "" }
-        }
-
-        onAccepted: {
-            // Credentials are verified against the shared users table in the database.
-            var role = excelHandler.login(usernameField.text, passwordField.text)
-            if (role !== "") {
-                isAuthenticated = true
-                loginError.text = ""
-                usernameField.text = ""; passwordField.text = ""
-                statusLabel.text = "Login successful (" + role + ")"; statusTimer.restart()
-            } else {
-                isAuthenticated = false
-                loginError.text = "Invalid credentials"; passwordField.text = ""
-                loginDialog.open()
-            }
-        }
-        
-        onOpened: loginError.text = ""
-    }
+    LoginDialog { id: loginDialog }
 
     /* ================= FILE ACTIONS ================= */
 
     function openExcelFile() {
-        var selectedFile = excelHandler.browseOpenFile("Open Excel File", "Excel files (*.xlsx *.xls)")
+        var selectedFile = Backend.browseOpenFile("Open Excel File", "Excel files (*.xlsx *.xls)")
         if (selectedFile === "") return
 
         var appended = false
-        if (excelHandler.currentFile !== "" || excelHandler.permanentFile !== "") {
+        if (Backend.currentFile !== "" || Backend.permanentFile !== "") {
             if (root.fileType === "stock") {
-                appended = excelHandler.appendStockFile(selectedFile)
+                appended = Backend.appendStockFile(selectedFile)
                 if (appended) {
-                    rows = excelHandler.model.rowCount()
-                    columns = excelHandler.model.columnCount()
+                    rows = Backend.model.rowCount()
+                    columns = Backend.model.columnCount()
                     selectedRow = -1
                     statusLabel.text = "Appended: " + selectedFile
                     statusTimer.restart()
@@ -284,29 +246,29 @@ ApplicationWindow {
         }
 
         if (!appended) {
-            if (excelHandler.loadExcel(selectedFile)) {
-                rows = excelHandler.model.rowCount()
-                columns = excelHandler.model.columnCount()
+            if (Backend.loadExcel(selectedFile)) {
+                rows = Backend.model.rowCount()
+                columns = Backend.model.columnCount()
                 selectedRow = -1
-                root.fileType = excelHandler.getFileType()
+                root.fileType = Backend.getFileType()
             }
         }
     }
 
     function saveAsExcelFile() {
-        var selectedFile = excelHandler.browseSaveFile("Save Excel File", "Excel files (*.xlsx)")
+        var selectedFile = Backend.browseSaveFile("Save Excel File", "Excel files (*.xlsx)")
         if (selectedFile === "") return
-        excelHandler.saveExcel(selectedFile)
+        Backend.saveExcel(selectedFile)
     }
 
     // Imports the user's stock xlsx into the shared database (login required).
     function importStockFileAction() {
-        var selectedFile = excelHandler.browseOpenFile("Import Stock File", "Excel files (*.xlsx *.xls)")
+        var selectedFile = Backend.browseOpenFile("Import Stock File", "Excel files (*.xlsx *.xls)")
         if (selectedFile === "") return
-        if (excelHandler.importStockFile(selectedFile)) {
-            rows = excelHandler.model.rowCount()
-            columns = excelHandler.model.columnCount()
-            root.fileType = excelHandler.getFileType()
+        if (Backend.importStockFile(selectedFile)) {
+            rows = Backend.model.rowCount()
+            columns = Backend.model.columnCount()
+            root.fileType = Backend.getFileType()
             statusLabel.text = "Stock file imported into the database"
             statusTimer.restart()
         }
@@ -323,20 +285,20 @@ ApplicationWindow {
 
         ColumnLayout {
             spacing: 10
-            Label { text: "Stock File (with Supply Chain columns)"; font.bold: true; font.pixelSize: 14; color: "#27ae60" }
-            Rectangle { Layout.fillWidth: true; height: 1; color: "#27ae60" }
+            Label { text: "Stock File (with Supply Chain columns)"; font.bold: true; font.pixelSize: 14; color: Theme.success }
+            Rectangle { Layout.fillWidth: true; height: 1; color: Theme.success }
             Label { text: "Number of Rows:"; font.bold: true }
             SpinBox { id: stockRowsSpin; from: 1; to: 1000; value: 15; editable: true }
             Label {
                 text: "Columns: Part Name | Part No | Stock | Department | Prepared | Approved | Vendor | Date | Unit Price"
-                font.pixelSize: 10; color: "#7f8c8d"; wrapMode: Text.WordWrap
+                font.pixelSize: 10; color: Theme.textSecondary; wrapMode: Text.WordWrap
             }
         }
 
         onAccepted: {
-            excelHandler.createStockFile(stockRowsSpin.value)
-            rows = excelHandler.model.rowCount()
-            columns = excelHandler.model.columnCount()
+            Backend.createStockFile(stockRowsSpin.value)
+            rows = Backend.model.rowCount()
+            columns = Backend.model.columnCount()
             selectedRow = -1
             root.fileType = "stock"
             statusLabel.text = "Created new Stock file: " + rows + " rows (9 columns)"
@@ -345,81 +307,13 @@ ApplicationWindow {
 
     /* ================= SEARCH DIALOG ================= */
 
-    Dialog {
+    StockSearchDialog {
         id: searchDialog
-        title: "Search Parts"
-        modal: true
-        standardButtons: Dialog.Close
-        anchors.centerIn: parent
-        width: 600; height: 500
-
-        function runSearch() {
-            var query = searchField.text.trim()
-            searchResultsModel.clear()
-            if (query === "") {
-                statusLabel.text = "Enter search text"
-                return
-            }
-            var results = excelHandler.searchAllMatches(query)
-            for (var i = 0; i < results.length; i++) searchResultsModel.append(results[i])
-            statusLabel.text = results.length === 0 ? "No results found" : "Found " + results.length + " result(s)"
+        onRowPicked: (row) => {
+            root.selectedRow = row
+            var pos = row - 1
+            if (pos >= 0) tableListView.positionViewAtIndex(pos, ListView.Center)
         }
-
-        ColumnLayout {
-            anchors.fill: parent; spacing: 10
-
-            Label { text: "Search by Part Name, Part No, or Vendor:"; font.bold: true }
-
-            RowLayout {
-                Layout.fillWidth: true; spacing: 10
-                TextField {
-                    id: searchField; Layout.fillWidth: true
-                    placeholderText: "Enter search text..."; selectByMouse: true
-                    Keys.onReturnPressed: searchButton.clicked()
-                    onTextChanged: searchDialog.runSearch()
-                }
-                Button {
-                    id: searchButton; text: "Search"; highlighted: true
-                    onClicked: searchDialog.runSearch()
-                }
-            }
-
-            Rectangle {
-                Layout.fillWidth: true; Layout.fillHeight: true
-                border.color: "#bdc3c7"; border.width: 1; color: "#ecf0f1"
-
-                ListView {
-                    id: searchResultsList; anchors.fill: parent; anchors.margins: 5; clip: true; spacing: 5
-                    model: ListModel { id: searchResultsModel }
-                    delegate: Rectangle {
-                        width: searchResultsList.width - 10; height: 60; color: "white"
-                        border.color: "#3498db"; border.width: 1; radius: 5
-                        ColumnLayout {
-                            anchors.fill: parent; anchors.margins: 8; spacing: 2
-                            Label { text: model.partName; font.bold: true; font.pixelSize: 13; color: "#2c3e50" }
-                            RowLayout {
-                                Label { text: "Part No: " + model.partNo; font.pixelSize: 11; color: "#7f8c8d" }
-                                Label { text: " | Stock: " + model.stock; font.pixelSize: 11; color: "#27ae60"; font.bold: true }
-                                Label { text: " | Vendor: " + model.vendor; font.pixelSize: 11; color: "#7f8c8d" }
-                            }
-                        }
-                        MouseArea {
-                            anchors.fill: parent; cursorShape: Qt.PointingHandCursor
-                            onClicked: {
-                                root.selectedRow = model.row
-                                searchDialog.close()
-                                var pos = model.row - 1
-                                if (pos >= 0) tableListView.positionViewAtIndex(pos, ListView.Center)
-                            }
-                        }
-                    }
-                }
-
-                Label { anchors.centerIn: parent; text: "No results"; visible: searchResultsModel.count === 0; color: "#95a5a6" }
-            }
-        }
-
-        onOpened: { searchField.focus = true; searchField.selectAll() }
     }
 
     /* ================= ADD ITEM DIALOG ================= */
@@ -458,14 +352,14 @@ ApplicationWindow {
                 selectByMouse: true
             }
 
-            Label { text: "If part exists, stock will be added to current quantity"; font.pixelSize: 10; color: "#7f8c8d"; wrapMode: Text.WordWrap }
+            Label { text: "If part exists, stock will be added to current quantity"; font.pixelSize: 10; color: Theme.textSecondary; wrapMode: Text.WordWrap }
         }
 
         onAccepted: {
             if (partNameField.text.trim() === "") { errorDialog.errorText = "Part name is required!"; errorDialog.open(); return }
-            excelHandler.addNewItem(partNameField.text.trim(), categoryField.currentText, quantityField.value, parseAmount(unitPriceField.text))
-            rows = excelHandler.model.rowCount()
-            columns = excelHandler.model.columnCount()
+            Backend.addNewItem(partNameField.text.trim(), categoryField.currentText, quantityField.value, Format.amount(unitPriceField.text))
+            rows = Backend.model.rowCount()
+            columns = Backend.model.columnCount()
             statusLabel.text = "Added: " + partNameField.text; statusTimer.restart()
             partNameField.text = ""; quantityField.value = 1; unitPriceField.text = "0.00"
         }
@@ -474,340 +368,30 @@ ApplicationWindow {
 
     /* ================= VENDOR MANAGEMENT DIALOG ================= */
 
-    Dialog {
+    VendorMasterDialog {
         id: vendorDialog
-        title: "Vendor Management"
-        modal: true
-        anchors.centerIn: parent
-        // Takes most of the window instead of a fixed 700x600. The vendor list
-        // is what people scan and search, so it gets every pixel the entry form
-        // above does not need.
-        width: Math.min(root.width - 80, 1240)
-        height: Math.min(root.height - 80, 860)
-
-        ColumnLayout {
-            anchors.fill: parent; spacing: 10
-
-            Label { text: "Vendor Master"; font.bold: true; font.pixelSize: 16; color: "#2c3e50" }  
-
-            // Add Vendor Form
-            Rectangle {
-                Layout.fillWidth: true
-                // Height follows the form rather than a fixed 250, which the
-                // thirteen fields had already outgrown - the last row and the
-                // Add button were being cut off at the bottom edge.
-                Layout.preferredHeight: vendorEntryGrid.implicitHeight + 20
-                color: "#f8f9fa"; border.color: "#dee2e6"; radius: 5
-
-                GridLayout {
-                    id: vendorEntryGrid
-                    anchors.fill: parent; anchors.margins: 10
-                    // Three label/field pairs per row when there is width for
-                    // them, two when the window is narrow.
-                    columns: width > 900 ? 6 : 4
-                    rowSpacing: 8; columnSpacing: 10
-
-                    Label { text: "Name:" } TextField { id: vendorNameField; Layout.fillWidth: true; Layout.preferredWidth: 150; placeholderText: "Vendor name" }
-                    Label { text: "Address:" } TextField { id: vendorAddressField; Layout.fillWidth: true; Layout.preferredWidth: 150; placeholderText: "Address" }
-                    Label { text: "Name of Bank & Branch:" } TextField { id: vendorBankBranchField; Layout.fillWidth: true; Layout.preferredWidth: 150; placeholderText: "Bank and branch name" }
-                    Label { text: "IFSC Code:" } TextField { id: vendorIfscField; Layout.fillWidth: true; Layout.preferredWidth: 150; placeholderText: "IFSC code" }
-                    Label { text: "Bank Account Number:" } TextField { id: vendorAccountField; Layout.fillWidth: true; Layout.preferredWidth: 150; placeholderText: "Account number" }
-                    Label { text: "CIN Number" } TextField { id: vendorCinField; Layout.fillWidth: true; Layout.preferredWidth: 150; placeholderText: "CIN number" }
-                    Label { text: "GSTIN Number:" } TextField { id: vendorGstinField; Layout.fillWidth: true; Layout.preferredWidth: 150; placeholderText: "GSTIN number" }
-                    Label { text: "PAN Number:" } TextField { id: vendorPANField; Layout.fillWidth: true; Layout.preferredWidth: 150; placeholderText: "PAN number" }
-                    Label { text: "Name in PAN Card:" } TextField { id: vendorPanNameField; Layout.fillWidth: true; Layout.preferredWidth: 150; placeholderText: "Name as per PAN card" }
-                    Label { text: "Contact Person:" } TextField { id: vendorContactPersonField; Layout.fillWidth: true; Layout.preferredWidth: 150; placeholderText: "Contact person name" }
-                    Label { text: "Email:" } TextField { id: vendorEmailField; Layout.fillWidth: true; Layout.preferredWidth: 150; placeholderText: "Email" }
-                    Label { text: "Phone No:" } TextField { id: vendorPhoneNumberField; Layout.fillWidth: true; Layout.preferredWidth: 150; placeholderText: "Phone number" }
-                    Label { text: "Item Category:" } TextField { id: vendorItemCategoryField; Layout.fillWidth: true; Layout.preferredWidth: 150; placeholderText: "Categories supplied" }
-
-                    // Spans the whole row so the button sits at the right edge
-                    // whether the grid is showing two pairs or three.
-                    Button {
-                        text: "Add Vendor"; highlighted: true
-                        Layout.columnSpan: vendorEntryGrid.columns
-                        Layout.alignment: Qt.AlignRight
-                        onClicked: {
-
-                            console.log("Adding vendor with details:", {
-                                name: vendorNameField.text,
-                                address: vendorAddressField.text,
-                                bankBranch: vendorBankBranchField.text,
-                                ifsc: vendorIfscField.text,
-                                account: vendorAccountField.text,
-                                cin: vendorCinField.text,
-                                gstin: vendorGstinField.text,
-                                pan: vendorPANField.text,
-                                panName: vendorPanNameField.text,
-                                contactPerson: vendorContactPersonField.text,
-                                email: vendorEmailField.text,
-                                phone: vendorPhoneNumberField.text,
-                                itemCategory: vendorItemCategoryField.text
-                            })
-
-                            var vendorDetails = {
-                                    vendorName: vendorNameField.text,
-                                    vendorAddress: vendorAddressField.text,
-                                    bankBranch: vendorBankBranchField.text,
-                                    ifsc: vendorIfscField.text,
-                                    accountNumber: vendorAccountField.text,
-                                    cin: vendorCinField.text,
-                                    gstin: vendorGstinField.text,
-                                    panNumber: vendorPANField.text,
-                                    panName: vendorPanNameField.text,
-                                    contactPerson: vendorContactPersonField.text,
-                                    email: vendorEmailField.text,
-                                    phone: vendorPhoneNumberField.text,
-                                    itemCategory: vendorItemCategoryField.text
-                                }
-
-                            if (excelHandler.addVendorDetails(vendorDetails)) {
-                                refreshVendorList()
-                                refreshVendorDropdowns()
-                                // vendorNameField.text = ""; vendorAddressField.text = ""; vendorBankBranchField.text = "";
-                                // vendorIfscField.text = ""; vendorAccountField.text = ""; vendorCinField.text = "";
-                                // vendorGstinField.text = ""; vendorPANField.text = ""; vendorPanNameField.text = "";
-                                // vendorContactPersonField.text = ""; vendorEmailField.text = ""; vendorPhoneNumberField.text = "";
-                                // vendorItemCategoryField.text = "";   
-                            }
-                        }
-                    }
-                }
-            }
-
-            // Vendor List
-            Label { text: "Vendors (" + vendorListModel.count + ")"; font.bold: true }
-
-            RowLayout {
-                Layout.fillWidth: true; spacing: 8
-                Label { text: "Search:"; font.bold: true }
-                TextField {
-                    id: vendorSearchField
-                    Layout.fillWidth: true
-                    placeholderText: "Search by name, phone, email, bank, category..."
-                    selectByMouse: true
-                    Keys.onReturnPressed: vendorSearchButton.clicked()
-                    onTextChanged: refreshVendorList(text)
-                }
-                Button {
-                    id: vendorSearchButton
-                    text: "Search"
-                    onClicked: refreshVendorList(vendorSearchField.text)
-                }
-            }
-
-            Rectangle {
-                Layout.fillWidth: true; Layout.fillHeight: true
-                border.color: "#dee2e6"; radius: 5
-
-                ListView {
-                    id: vendorListView; anchors.fill: parent; anchors.margins: 5; clip: true; spacing: 4
-                    model: ListModel { id: vendorListModel }
-                    delegate: Rectangle {
-                        width: vendorListView.width - 10; height: 50
-                        color: "#fff"; border.color: "#e0e0e0"; radius: 4
-                        RowLayout {
-                            anchors.fill: parent; anchors.margins: 8
-                            Item {
-                                id: vendorInfoArea
-                                Layout.fillWidth: true
-                                Layout.fillHeight: true
-
-                                ColumnLayout {
-                                    anchors.fill: parent
-                                    spacing: 2
-                                    Label {
-                                        text: model.name; font.bold: true; font.pixelSize: 13
-                                        Layout.fillWidth: true; elide: Text.ElideRight
-                                    }
-                                    Label {
-                                        text: model.phone + "  |  " + model.email + "  |  " + model.bankBranch
-                                        font.pixelSize: 11; color: "#7f8c8d"
-                                        Layout.fillWidth: true; elide: Text.ElideRight
-                                    }
-                                }
-
-                                MouseArea {
-                                    anchors.fill: parent
-                                    cursorShape: Qt.PointingHandCursor
-                                    onClicked: {
-                                        openVendorDetails({
-                                            name: model.name,
-                                            address: model.address,
-                                            phone: model.phone,
-                                            email: model.email,
-                                            bankBranch: model.bankBranch,
-                                            ifsc: model.ifsc,
-                                            accountNumber: model.accountNumber,
-                                            cin: model.cin,
-                                            gstin: model.gstin,
-                                            pan: model.pan,
-                                            panName: model.panName,
-                                            contactPerson: model.contactPerson,
-                                            itemCategory: model.itemCategory
-                                        })
-                                    }
-                                }
-                            }
-                            Button {
-                                id: vendorDeleteButton
-                                Layout.alignment: Qt.AlignRight
-                                text: "Delete"; flat: true
-                                contentItem: Text { text: "Delete"; color: "#e74c3c"; font.pixelSize: 11 }
-                                onClicked: {
-                                    excelHandler.deleteVendor(model.name)
-                                    refreshVendorList()
-                                    refreshVendorDropdowns()
-                                }
-                            }
-                        }
-
-                        // Mouse handling moved to vendorInfoArea to avoid blocking the Delete button.
-                    }
-                }
-
-                Label { anchors.centerIn: parent; text: "No vendors added"; visible: vendorListModel.count === 0; color: "#95a5a6" }
-            }
-
-            Button { text: "Close"; Layout.alignment: Qt.AlignRight; onClicked: vendorDialog.close() }
-        }
-
-        onOpened: {
-            refreshVendorList()
-            refreshVendorDropdowns()
-        }
+        onDropdownsStale: refreshVendorDropdowns()
+        onVendorActivated: (vendor) => vendorDetailsDialog.showVendor(vendor)
     }
 
     /* ================= VENDOR DETAILS DIALOG ================= */
 
-    Dialog {
+    VendorDetailsDialog {
         id: vendorDetailsDialog
-        title: "Vendor Details"
-        modal: true
-        anchors.centerIn: parent
-        standardButtons: Dialog.Ok | Dialog.Cancel
-        // Wide enough for three field pairs per row, and never taller than
-        // the window: the fields scroll inside rather than pushing the OK
-        // and Cancel buttons off the bottom edge.
-        width: Math.min(root.width - 120, 1100)
-        height: Math.min(root.height - 120, 540)
-
-        ColumnLayout {
-            anchors.fill: parent
-            spacing: 10
-            Label { text: "Edit Vendor Details"; font.bold: true; font.pixelSize: 14 }
-            Rectangle { Layout.fillWidth: true; height: 1; color: "#ccc" }
-
-            ScrollView {
-                id: editVendorScroll
-                Layout.fillWidth: true; Layout.fillHeight: true
-                clip: true
-                contentWidth: availableWidth
-
-                GridLayout {
-                    width: editVendorScroll.availableWidth
-                    columns: width > 900 ? 6 : 4
-                    rowSpacing: 8; columnSpacing: 10
-
-                    Label { text: "Name:" } TextField { id: editVendorNameField; Layout.fillWidth: true; Layout.preferredWidth: 150; placeholderText: "Vendor name" }
-                    Label { text: "Address:" } TextField { id: editVendorAddressField; Layout.fillWidth: true; Layout.preferredWidth: 150; placeholderText: "Address" }
-                    Label { text: "Name of Bank & Branch:" } TextField { id: editVendorBankBranchField; Layout.fillWidth: true; Layout.preferredWidth: 150; placeholderText: "Bank and branch name" }
-                    Label { text: "IFSC Code:" } TextField { id: editVendorIfscField; Layout.fillWidth: true; Layout.preferredWidth: 150; placeholderText: "IFSC code" }
-                    Label { text: "Bank Account Number:" } TextField { id: editVendorAccountField; Layout.fillWidth: true; Layout.preferredWidth: 150; placeholderText: "Account number" }
-                    Label { text: "CIN Number" } TextField { id: editVendorCinField; Layout.fillWidth: true; Layout.preferredWidth: 150; placeholderText: "CIN number" }
-                    Label { text: "GSTIN Number:" } TextField { id: editVendorGstinField; Layout.fillWidth: true; Layout.preferredWidth: 150; placeholderText: "GSTIN number" }
-                    Label { text: "PAN Number:" } TextField { id: editVendorPANField; Layout.fillWidth: true; Layout.preferredWidth: 150; placeholderText: "PAN number" }
-                    Label { text: "Name in PAN Card:" } TextField { id: editVendorPanNameField; Layout.fillWidth: true; Layout.preferredWidth: 150; placeholderText: "Name as per PAN card" }
-                    Label { text: "Contact Person:" } TextField { id: editVendorContactPersonField; Layout.fillWidth: true; Layout.preferredWidth: 150; placeholderText: "Contact person name" }
-                    Label { text: "Email:" } TextField { id: editVendorEmailField; Layout.fillWidth: true; Layout.preferredWidth: 150; placeholderText: "Email" }
-                    Label { text: "Phone No:" } TextField { id: editVendorPhoneNumberField; Layout.fillWidth: true; Layout.preferredWidth: 150; placeholderText: "Phone number" }
-                    Label { text: "Item Category:" } TextField { id: editVendorItemCategoryField; Layout.fillWidth: true; Layout.preferredWidth: 150; placeholderText: "Categories supplied" }
-                }
-            }
-        }
-
-        onAccepted: {
-            var vendorDetails = {
-                originalName: vendorOriginalName,
-                vendorName: editVendorNameField.text,
-                vendorAddress: editVendorAddressField.text,
-                bankBranch: editVendorBankBranchField.text,
-                ifsc: editVendorIfscField.text,
-                accountNumber: editVendorAccountField.text,
-                cin: editVendorCinField.text,
-                gstin: editVendorGstinField.text,
-                panNumber: editVendorPANField.text,
-                panName: editVendorPanNameField.text,
-                contactPerson: editVendorContactPersonField.text,
-                email: editVendorEmailField.text,
-                phone: editVendorPhoneNumberField.text,
-                itemCategory: editVendorItemCategoryField.text
-            }
-
-            if (excelHandler.updateVendorDetails(vendorDetails)) {
-                refreshVendorList()
-                refreshVendorDropdowns()
-            }
-        }
+        onVendorChanged: vendorDialog.refresh()
+        onDropdownsStale: refreshVendorDropdowns()
     }
 
-    function refreshVendorList(filterText) {
-        vendorListModel.clear()
-        var query = (filterText || "").toString().trim().toLowerCase()
-        var vendors = excelHandler.getVendorList()
-        for (var i = 0; i < vendors.length; i++){
-            var v = vendors[i];
-                var haystack = [
-                    v.vendorName, v.vendorAddress, v.phone, v.email,
-                    v.bankBranch, v.ifsc, v.gstin, v.panNumber,
-                    v.contactPerson, v.itemCategory
-                ].join(" ").toLowerCase()
-                if (query !== "" && haystack.indexOf(query) === -1) continue
-                vendorListModel.append({
-                    name: v.vendorName || "",
-                    address: v.vendorAddress || "",
-                    phone: v.phone || "",
-                    email: v.email || "",
-                    bankBranch: v.bankBranch || "",
-                    ifsc: v.ifsc || "",
-                    accountNumber: v.accountNumber || "",
-                    cin: v.cin || "",
-                    gstin: v.gstin || "",
-                    pan: v.panNumber || "",
-                    panName: v.panName || "",
-                    contactPerson: v.contactPerson || "",
-                    itemCategory: v.itemCategory || ""
-              })
-        }
-    }
 
     function refreshVendorDropdowns() {
-        var vendorNames = excelHandler.getVendorNames()
+        var vendorNames = Backend.getVendorNames()
         itemVendorField.model = vendorNames
         poVendorField.model = vendorNames
         editItemVendorField.model = vendorNames
         prVendorField.model = vendorNames
     }
 
-    property string vendorOriginalName: ""
 
-    function openVendorDetails(vendor) {
-        vendorOriginalName = vendor.name || ""
-        editVendorNameField.text = vendor.name || ""
-        editVendorAddressField.text = vendor.address || ""
-        editVendorBankBranchField.text = vendor.bankBranch || ""
-        editVendorIfscField.text = vendor.ifsc || ""
-        editVendorAccountField.text = vendor.accountNumber || ""
-        editVendorCinField.text = vendor.cin || ""
-        editVendorGstinField.text = vendor.gstin || ""
-        editVendorPANField.text = vendor.pan || ""
-        editVendorPanNameField.text = vendor.panName || ""
-        editVendorContactPersonField.text = vendor.contactPerson || ""
-        editVendorEmailField.text = vendor.email || ""
-        editVendorPhoneNumberField.text = vendor.phone || ""
-        editVendorItemCategoryField.text = vendor.itemCategory || ""
-        vendorDetailsDialog.open()
-    }
 
     function applyPoPartDetails(partName) {
         var key = (partName || "").toString().trim()
@@ -819,7 +403,7 @@ ApplicationWindow {
         }
         var details = poPartDetailsLookup[key]
         if (details !== undefined && details !== null) {
-            poUnitPriceField.text = formatAmount(details.unitPrice)
+            poUnitPriceField.text = Format.fixed(details.unitPrice)
             poDepartmentField.text = details.department || ""
             poDepartmentAutoFilled = true
             // Auto-select the vendor that belongs to this item (from the
@@ -849,7 +433,7 @@ ApplicationWindow {
     }
 
     function refreshPoPdfPreview() {
-        var result = excelHandler.generatePOPreview(poPreviewPoNo,
+        var result = Backend.generatePOPreview(poPreviewPoNo,
                                                     poPreviewCommentsField.text)
         if (!result || !result.pages || result.pages.length === 0) {
             poPreviewPages = []
@@ -863,7 +447,7 @@ ApplicationWindow {
     }
 
     function sendPoPdf() {
-        var saved = excelHandler.savePOPdf(poPreviewPoNo, "",
+        var saved = Backend.savePOPdf(poPreviewPoNo, "",
                                            poPreviewCommentsField.text)
         if (saved === "") return
         poLastSavedPdf = saved
@@ -887,7 +471,7 @@ ApplicationWindow {
     function refreshPoPartPicker(filter) {
         poPartPickerModel.clear()
         var f = (filter || "").toString().trim().toLowerCase()
-        var items = excelHandler.getItemMasterList()
+        var items = Backend.getItemMasterList()
         for (var i = 0; i < items.length; i++) {
             var it = items[i]
             var partName = (it.partName || "").toString()
@@ -909,7 +493,7 @@ ApplicationWindow {
     function refreshPoVendorPicker(filter) {
         poVendorPickerModel.clear()
         var f = (filter || "").toString().trim().toLowerCase()
-        var vendors = excelHandler.getVendorList()
+        var vendors = Backend.getVendorList()
         for (var i = 0; i < vendors.length; i++) {
             var v = vendors[i]
             var name = (v.vendorName || "").toString()
@@ -974,418 +558,40 @@ ApplicationWindow {
     }
 
     Connections {
-        target: excelHandler
+        target: Backend
         function onItemMasterListChanged() {
-            refreshItemMasterList(itemSearchField.text)
+            itemMasterDialog.refresh()
             refreshPartNameDropdown()
             if (poDialog.visible) {
                 applyPoPartDetails(poPartNameField.currentText)
             }
         }
         function onVendorListChanged() {
-            refreshVendorList(vendorSearchField.text)
+            vendorDialog.refresh()
             refreshVendorDropdowns()
         }
     }
 
-    property string itemOriginalPartNo: ""
 
-    function openItemDetails(item) {
-        itemOriginalPartNo = item.partNo || ""
-        editItemPartNameField.text = item.partName || ""
-        editItemPartNoField.text = item.partNo || ""
-        editItemDepartmentField.text = item.department || ""
-        editItemUnitPriceField.text = formatAmount(item.unitPrice)
-        editItemRequiredQtyField.value = item.requiredQty || 0
-        editItemVendorField.editText = item.vendor || ""
-        editItemVendorField.currentIndex = -1
-        // Setting the losing radio too: leaving it checked from the previous
-        // item would show two selected buttons in the same group.
-        var intangible = (item.itemType || "") === "Intangible"
-        editItemIntangibleRadio.checked = intangible
-        editItemTangibleRadio.checked = !intangible
-        editItemHsnField.text = item.hsnCode || ""
-        editItemSacField.text = item.sacCode || ""
-        editItemUnitField.text = item.unit || ""
-        itemDetailsDialog.open()
-    }
 
     /* =================  ITEM MASTER DIALOG =================== */             
 
-    Dialog {
+    ItemMasterDialog {
         id: itemMasterDialog
-        title: "Item Master Management"
-        modal: true
-        anchors.centerIn: parent
-        // Takes most of the window instead of a fixed 750x650, so the item list
-        // below shows many more rows at once and the wider entry form fits its
-        // fields three pairs to a row.
-        width: Math.min(root.width - 80, 1240)
-        height: Math.min(root.height - 80, 860)
-
-        ColumnLayout{
-            anchors.fill: parent; spacing: 10
-
-            Label { text: "Item Master"; font.bold: true; font.pixelSize: 16; color: "#2c3e50"}
-
-            Rectangle {
-                Layout.fillWidth: true
-                // Height follows the form rather than a fixed 245, so the
-                // classification row added below cannot push the Add button
-                // past the bottom edge.
-                Layout.preferredHeight: itemEntryGrid.implicitHeight + 20
-                color: "#f0f8ff"; border.color: "#3498db"; radius: 5
-
-                GridLayout {
-                    id: itemEntryGrid
-                    anchors.fill: parent; anchors.margins: 10
-                    // Three label/field pairs per row when there is width for
-                    // them, two when the window is narrow.
-                    columns: width > 900 ? 6 : 4
-                    rowSpacing: 8; columnSpacing: 10
-
-                    Label { text: "Part Name:" } TextField { id: itemPartNameField; Layout.fillWidth: true; Layout.preferredWidth: 150; placeholderText: "Part name" }
-                    Label { text: "Part No:" } TextField { id: itemPartNoField; Layout.fillWidth: true; Layout.preferredWidth: 150; placeholderText: "Part number" }
-                    Label { text: "Department:" } TextField { id: itemDepartmentField; Layout.fillWidth: true; Layout.preferredWidth: 150; placeholderText: "Department" }
-                    Label { text: "Unit Price:" }
-                    TextField {
-                        id: itemUnitPriceField
-                        Layout.fillWidth: true
-                        Layout.preferredWidth: 150
-                        placeholderText: "0.00"
-                        text: "0.00"
-                        validator: DoubleValidator { bottom: 0; decimals: 2 }
-                        inputMethodHints: Qt.ImhFormattedNumbersOnly
-                        selectByMouse: true
-                    }
-                    Label { text: "Required Quantity:" } SpinBox { id: itemRequiredQtyField; Layout.fillWidth: true; Layout.preferredWidth: 150; from: 0; to: 100000; value: 0; editable: true }
-                    Label { text: "Vendor Preferred:" }
-                    RowLayout {
-                        Layout.fillWidth: true; Layout.preferredWidth: 150; spacing: 6
-                        ComboBox { id: itemVendorField; Layout.fillWidth: true; editable: true; model: excelHandler.getVendorNames() }
-                        Button {
-                            text: "\u{1F50D}"
-                            Layout.preferredWidth: 40
-                            ToolTip.visible: hovered
-                            ToolTip.text: "Search vendors"
-                            onClicked: openVendorPicker(itemVendorField)
-                        }
-                    }
-
-                    // A tangible good is numbered with an HSN code, an
-                    // intangible service with a SAC code, so the classification
-                    // decides which code field is asked for below.
-                    Label { text: "Classification:" }
-                    RowLayout {
-                        Layout.fillWidth: true; Layout.preferredWidth: 150; spacing: 14
-                        RadioButton {
-                            id: itemTangibleRadio
-                            text: "Tangible"; checked: true
-                            ToolTip.visible: hovered
-                            ToolTip.text: "A physical good, numbered with an HSN code"
-                        }
-                        RadioButton {
-                            id: itemIntangibleRadio
-                            text: "Intangible"
-                            ToolTip.visible: hovered
-                            ToolTip.text: "A service, numbered with a SAC code"
-                        }
-                    }
-
-                    Label { text: itemTangibleRadio.checked ? "HSN Code:" : "SAC Code:" }
-                    // Both codes are kept and only the one that matches the
-                    // classification is shown, so flipping an item over and
-                    // back never costs you the number already typed.
-                    StackLayout {
-                        Layout.fillWidth: true
-                        Layout.preferredWidth: 150
-                        currentIndex: itemTangibleRadio.checked ? 0 : 1
-                        TextField { id: itemHsnField; placeholderText: "e.g. 85015210"; selectByMouse: true }
-                        TextField { id: itemSacField; placeholderText: "e.g. 998313"; selectByMouse: true }
-                    }
-
-                    // Printed on a delivery challan, so keeping it on the item
-                    // saves retyping it for every delivery.
-                    Label { text: "Unit:" } TextField { id: itemUnitField; Layout.fillWidth: true; Layout.preferredWidth: 150; placeholderText: "Nos, Kg, Mtr..."; selectByMouse: true }
-
-                    // Spans the whole row so the button sits at the right edge
-                    // whether the grid is showing two pairs or three.
-                    Button {
-                        text: "Add/Update Item"; highlighted: true
-                        Layout.columnSpan: itemEntryGrid.columns
-                        Layout.alignment: Qt.AlignRight
-                        onClicked: {
-                            var itemMasterDetails = {
-                                partName: itemPartNameField.text,
-                                partNo: itemPartNoField.text,
-                                department: itemDepartmentField.text,
-                                category: itemDepartmentField.text,
-                                unitPrice: parseAmount(itemUnitPriceField.text),
-                                requiredQty: itemRequiredQtyField.value,
-                                stockQty: itemRequiredQtyField.value,
-                                vendor: itemVendorField.currentText,
-                                itemType: itemTangibleRadio.checked ? "Tangible" : "Intangible",
-                                hsnCode: itemHsnField.text,
-                                sacCode: itemSacField.text,
-                                unit: itemUnitField.text
-                            }
-                            if (excelHandler.addItemMasterDetails(itemMasterDetails)) {
-                                refreshItemMasterList()
-                                itemPartNameField.text = ""; itemPartNoField.text = ""; itemDepartmentField.text = "";
-                                itemUnitPriceField.text = "0.00"; itemRequiredQtyField.value = 0; itemVendorField.currentIndex = -1;
-                                itemHsnField.text = ""; itemSacField.text = ""; itemUnitField.text = "";
-                                itemTangibleRadio.checked = true;
-                            }
-                        }
-                    }
-                }
-            }
-
-            RowLayout {
-                Layout.fillWidth: true; spacing: 8
-                Label { text: "Search:"; font.bold: true }
-                TextField {
-                    id: itemSearchField
-                    Layout.fillWidth: true
-                    placeholderText: "Search by part name, part no, department, vendor, HSN/SAC..."
-                    selectByMouse: true
-                    Keys.onReturnPressed: itemSearchButton.clicked()
-                    onTextChanged: refreshItemMasterList(text)
-                }
-                Button {
-                    id: itemSearchButton
-                    text: "Search"
-                    onClicked: refreshItemMasterList(itemSearchField.text)
-                }
-            }
-
-            Rectangle {
-                Layout.fillWidth: true; Layout.fillHeight: true
-                border.color: "#dee2e6"; radius: 5
-
-                ListView {
-                    id: itemMasterListView; anchors.fill: parent; anchors.margins: 5; clip: true; spacing: 4
-                    model: ListModel { id: itemMasterListModel }
-                    delegate: Rectangle {
-                        width: itemMasterListView.width - 10; height: 70; color: "#fff"; border.color: "#e0e0e0"; radius: 4
-                        RowLayout {
-                            anchors.fill: parent; anchors.margins: 8
-                            Item {
-                                id: itemInfoArea
-                                Layout.fillWidth: true
-                                Layout.fillHeight: true
-
-                                ColumnLayout {
-                                    anchors.fill: parent
-                                    spacing: 2
-                                    Label {
-                                        text: model.partName + " (" + model.partNo + ")"
-                                        font.bold: true; font.pixelSize: 13; color: "#2c3e50"
-                                        Layout.fillWidth: true; elide: Text.ElideRight
-                                    }
-                                    Label {
-                                        text: "Department: " + model.department + " | Vendor: " + model.vendor
-                                        font.pixelSize: 11; color: "#7f8c8d"
-                                        Layout.fillWidth: true; elide: Text.ElideRight
-                                    }
-                                    Label {
-                                        text: "Unit Price: " + formatRupees(model.unitPrice) + " | Required Qty: " + model.requiredQty +
-                                              " | " + model.itemType +
-                                              (model.taxCode !== "" ? " | " + (model.itemType === "Intangible" ? "SAC: " : "HSN: ") + model.taxCode : "") +
-                                              (model.unit !== "" ? " | Unit: " + model.unit : "")
-                                        font.pixelSize: 10; color: "#95a5a6"
-                                        Layout.fillWidth: true; elide: Text.ElideRight
-                                    }
-                                }
-
-                                MouseArea {
-                                    anchors.fill: parent
-                                    cursorShape: Qt.PointingHandCursor
-                                    onClicked: {
-                                        openItemDetails({
-                                            partName: model.partName,
-                                            partNo: model.partNo,
-                                            department: model.department,
-                                            unitPrice: model.unitPrice,
-                                            requiredQty: model.requiredQty,
-                                            vendor: model.vendor,
-                                            itemType: model.itemType,
-                                            hsnCode: model.hsnCode,
-                                            sacCode: model.sacCode,
-                                            unit: model.unit
-                                        })
-                                    }
-                                }
-                            }
-                            Button {
-                                id: itemDeleteButton
-                                Layout.alignment: Qt.AlignRight
-                                text: "Delete"; flat: true
-                                contentItem: Text { text: "Delete"; color: "#e74c3c"; font.pixelSize: 11 }
-                                onClicked: { excelHandler.deleteItem(model.partName); refreshItemMasterList() }
-                            }
-                        }
-                    }   
-                }
-                
-                 Label { anchors.centerIn: parent; text: "No items added"; visible: itemMasterListModel.count === 0; color: "#95a5a6" }
-            }
-
-            Button { text: "Close"; Layout.alignment: Qt.AlignRight; onClicked: itemMasterDialog.close() }
-        }
-
-        onOpened: {
-            refreshItemMasterList()
-            refreshVendorDropdowns()
-        }
-    }      
+        onDropdownsStale: refreshVendorDropdowns()
+        onPartNamesStale: (items) => refreshPartNameDropdown(items)
+        onItemActivated: (item) => itemDetailsDialog.showItem(item)
+        onVendorPickerRequested: (field) => openVendorPicker(field)
+    }
 
     /* ================= ITEM DETAILS DIALOG ================= */
 
-    Dialog {
+    ItemDetailsDialog {
         id: itemDetailsDialog
-        title: "Item Details"
-        modal: true
-        anchors.centerIn: parent
-        standardButtons: Dialog.Ok | Dialog.Cancel
-        // Wide enough for three field pairs per row, and never taller than the
-        // window: the fields scroll inside rather than pushing the OK and
-        // Cancel buttons off the bottom edge.
-        width: Math.min(root.width - 120, 1100)
-        height: Math.min(root.height - 120, 520)
-
-        ColumnLayout {
-            anchors.fill: parent
-            spacing: 10
-            Label { text: "Edit Item Details"; font.bold: true; font.pixelSize: 14 }
-            Rectangle { Layout.fillWidth: true; height: 1; color: "#ccc" }
-
-            ScrollView {
-                id: editItemScroll
-                Layout.fillWidth: true; Layout.fillHeight: true
-                clip: true
-                contentWidth: availableWidth
-
-                GridLayout {
-                    width: editItemScroll.availableWidth
-                    columns: width > 900 ? 6 : 4
-                    rowSpacing: 8; columnSpacing: 10
-
-                    Label { text: "Part Name:" } TextField { id: editItemPartNameField; Layout.fillWidth: true; Layout.preferredWidth: 150; placeholderText: "Part name" }
-                    Label { text: "Part No:" } TextField { id: editItemPartNoField; Layout.fillWidth: true; Layout.preferredWidth: 150; placeholderText: "Part number" }
-                    Label { text: "Department:" } TextField { id: editItemDepartmentField; Layout.fillWidth: true; Layout.preferredWidth: 150; placeholderText: "Department" }
-                    Label { text: "Unit Price:" }
-                    TextField {
-                        id: editItemUnitPriceField
-                        Layout.fillWidth: true
-                        Layout.preferredWidth: 150
-                        placeholderText: "0.00"
-                        text: "0.00"
-                        validator: DoubleValidator { bottom: 0; decimals: 2 }
-                        inputMethodHints: Qt.ImhFormattedNumbersOnly
-                        selectByMouse: true
-                    }
-                    Label { text: "Required Quantity:" } SpinBox { id: editItemRequiredQtyField; Layout.fillWidth: true; Layout.preferredWidth: 150; from: 0; to: 100000; value: 0; editable: true }
-                    Label { text: "Vendor Preferred:" }
-                    RowLayout {
-                        Layout.fillWidth: true; Layout.preferredWidth: 150; spacing: 6
-                        ComboBox { id: editItemVendorField; Layout.fillWidth: true; editable: true; model: excelHandler.getVendorNames() }
-                        Button {
-                            text: "\u{1F50D}"
-                            Layout.preferredWidth: 40
-                            ToolTip.visible: hovered
-                            ToolTip.text: "Search vendors"
-                            onClicked: openVendorPicker(editItemVendorField)
-                        }
-                    }
-
-                    // Same pairing as the add form: the classification decides
-                    // whether this item is numbered by HSN or by SAC.
-                    Label { text: "Classification:" }
-                    RowLayout {
-                        Layout.fillWidth: true; Layout.preferredWidth: 150; spacing: 14
-                        RadioButton {
-                            id: editItemTangibleRadio
-                            text: "Tangible"; checked: true
-                            ToolTip.visible: hovered
-                            ToolTip.text: "A physical good, numbered with an HSN code"
-                        }
-                        RadioButton {
-                            id: editItemIntangibleRadio
-                            text: "Intangible"
-                            ToolTip.visible: hovered
-                            ToolTip.text: "A service, numbered with a SAC code"
-                        }
-                    }
-
-                    Label { text: editItemTangibleRadio.checked ? "HSN Code:" : "SAC Code:" }
-                    StackLayout {
-                        Layout.fillWidth: true
-                        Layout.preferredWidth: 150
-                        currentIndex: editItemTangibleRadio.checked ? 0 : 1
-                        TextField { id: editItemHsnField; placeholderText: "e.g. 85015210"; selectByMouse: true }
-                        TextField { id: editItemSacField; placeholderText: "e.g. 998313"; selectByMouse: true }
-                    }
-
-                    Label { text: "Unit:" } TextField { id: editItemUnitField; Layout.fillWidth: true; Layout.preferredWidth: 150; placeholderText: "Nos, Kg, Mtr..."; selectByMouse: true }
-                }
-            }
-        }
-
-        onAccepted: {
-            var itemDetails = {
-                originalPartNo: itemOriginalPartNo,
-                partName: editItemPartNameField.text,
-                partNo: editItemPartNoField.text,
-                department: editItemDepartmentField.text,
-                category: editItemDepartmentField.text,
-                unitPrice: parseAmount(editItemUnitPriceField.text),
-                requiredQty: editItemRequiredQtyField.value,
-                stockQty: editItemRequiredQtyField.value,
-                vendor: editItemVendorField.currentText,
-                itemType: editItemTangibleRadio.checked ? "Tangible" : "Intangible",
-                hsnCode: editItemHsnField.text,
-                sacCode: editItemSacField.text,
-                unit: editItemUnitField.text
-            }
-
-            if (excelHandler.updateItemMasterDetails(itemDetails)) {
-                refreshItemMasterList()
-            }
-        }
+        onItemChanged: itemMasterDialog.refresh()
+        onVendorPickerRequested: (field) => openVendorPicker(field)
     }
     
-    function refreshItemMasterList(filterText) {
-        itemMasterListModel.clear()
-        var query = (filterText || "").toString().trim().toLowerCase()
-        var items = excelHandler.getItemMasterList()
-        for (var i = 0; i < items.length; i++){
-            var item = items[i];
-                var department = item.department || item.category || ""
-                var requiredQty = item.requiredQty || item.stockQty || 0
-                var itemType = item.itemType || "Tangible"
-                var haystack = [
-                    item.partName, item.partNo, department, item.vendor,
-                    itemType, item.hsnCode, item.sacCode
-                ].join(" ").toLowerCase()
-                if (query !== "" && haystack.indexOf(query) === -1) continue
-                itemMasterListModel.append({
-                    partName: item.partName || "",
-                    partNo: item.partNo || "",
-                    department: department,
-                    unitPrice: item.unitPrice || 0,
-                    requiredQty: requiredQty,
-                    vendor: item.vendor || "",
-                    itemType: itemType,
-                    hsnCode: item.hsnCode || "",
-                    sacCode: item.sacCode || "",
-                    // Whichever of the two the classification says to print.
-                    taxCode: item.taxCode || "",
-                    unit: item.unit || "",
-              })
-        }
-        refreshPartNameDropdown(items)
-    }
 
     property var poPartLookup: ({})
     property var poPartDetailsLookup: ({})
@@ -1399,7 +605,7 @@ ApplicationWindow {
     function refreshPartNameDropdown(items) {
         var sourceItems = items
         if (sourceItems === undefined || sourceItems === null) {
-            sourceItems = excelHandler.getItemMasterList()
+            sourceItems = Backend.getItemMasterList()
         }
 
         var partNames = []
@@ -1440,13 +646,13 @@ ApplicationWindow {
     function refreshIssuePartDropdown(filterText) {
         issueSearchModel.clear()
         var query = (filterText || "").toString().trim().toLowerCase()
-        var totalRows = excelHandler.model.rowCount()
+        var totalRows = Backend.model.rowCount()
 
         for (var i = 1; i < totalRows; i++) {
-            var partName = (excelHandler.model.getData(i, 0) || "").toString().trim()
+            var partName = (Backend.model.getData(i, 0) || "").toString().trim()
             if (partName === "") continue
 
-            var stock = parseInt(excelHandler.model.getData(i, 2)) || 0
+            var stock = parseInt(Backend.model.getData(i, 2)) || 0
             if (stock <= 0) continue
 
             if (query !== "" && partName.toLowerCase().indexOf(query) === -1) continue
@@ -1454,41 +660,6 @@ ApplicationWindow {
         }
 
         issuePartField.model = issueSearchModel
-    }
-
-    function parseAmount(value) {
-        var n = parseFloat(value)
-        return isNaN(n) ? 0 : n
-    }
-
-    function formatAmount(value) {
-        return parseAmount(value).toFixed(2)
-    }
-
-    // Indian digit grouping (12,34,56,789.00) so amounts stay readable all the
-    // way up to crores, matching the grouping on the printed purchase order.
-    function groupIndianDigits(value) {
-        var n = parseAmount(value)
-        var fixed = Math.abs(n).toFixed(2)
-        var dot = fixed.indexOf(".")
-        var whole = fixed.substring(0, dot)
-        var frac = fixed.substring(dot)
-        if (whole.length > 3) {
-            var last3 = whole.substring(whole.length - 3)
-            var lead = whole.substring(0, whole.length - 3)
-            var grouped = ""
-            // Everything above the last three digits is grouped in pairs.
-            while (lead.length > 2) {
-                grouped = "," + lead.substring(lead.length - 2) + grouped
-                lead = lead.substring(0, lead.length - 2)
-            }
-            whole = lead + grouped + "," + last3
-        }
-        return (n < 0 ? "-" : "") + whole + frac
-    }
-
-    function formatRupees(value) {
-        return "\u20B9 " + groupIndianDigits(value)
     }
 
     // Opens the shared calendar for a date field. seedField supplies the month
@@ -1499,26 +670,6 @@ ApplicationWindow {
         expectedDateDialog.purpose = purpose
         expectedDateDialog.seedText = (field.text === "" && seedField) ? seedField.text : field.text
         expectedDateDialog.open()
-    }
-
-    // "from -> to" for a required period, collapsing to a single date when only
-    // one end is known. Mirrors expectedPeriod() on the printed order.
-    function formatPeriod(fromText, toText) {
-        var from = (fromText || "").toString().trim()
-        var to = (toText || "").toString().trim()
-        if (from === "" && to === "") return "-"
-        if (to === "" || from === to) return from === "" ? to : from
-        if (from === "") return "up to " + to
-        return from + " \u2192 " + to
-    }
-
-    // Inclusive length of the period, or 0 when it is not a usable range.
-    function periodDays(fromText, toText) {
-        var from = new Date(fromText)
-        var to = new Date(toText)
-        if (isNaN(from.getTime()) || isNaN(to.getTime())) return 0
-        var days = Math.round((to.getTime() - from.getTime()) / 86400000) + 1
-        return days > 0 ? days : 0
     }
 
     function showPoPartDetails(partName) {
@@ -1568,7 +719,7 @@ ApplicationWindow {
         if (vendor === "") { statusLabel.text = "Select a vendor for " + partName; statusTimer.restart(); return }
 
         var qty = poQtyField.value
-        var price = parseAmount(poUnitPriceField.text)
+        var price = Format.amount(poUnitPriceField.text)
         poCartModel.append({
             partName: partName,
             partNo: poPartNoField.text,
@@ -1595,12 +746,12 @@ ApplicationWindow {
 
             RowLayout {
                 Layout.fillWidth: true
-                Label { text: "Purchase Orders"; font.bold: true; font.pixelSize: 16; color: "#2c3e50" }
+                Label { text: "Purchase Orders"; font.bold: true; font.pixelSize: 16; color: Theme.textPrimary }
                 Item { Layout.fillWidth: true }
                 Label {
                     text: "Raising this order for " + root.poFromRequest
                     visible: root.poFromRequest !== ""
-                    font.pixelSize: 12; font.bold: true; color: "#e67e22"
+                    font.pixelSize: 12; font.bold: true; color: Theme.warning
                 }
             }
 
@@ -1610,7 +761,7 @@ ApplicationWindow {
             Rectangle {
                 Layout.fillWidth: true
                 Layout.preferredHeight: poEntryGrid.implicitHeight + 2 * poEntryGrid.anchors.margins
-                color: "#f0f8ff"; border.color: "#3498db"; radius: 5
+                color: Theme.infoWash; border.color: Theme.info; radius: 5
 
                 GridLayout {
                     id: poEntryGrid
@@ -1625,7 +776,7 @@ ApplicationWindow {
                         Layout.minimumWidth: 92; horizontalAlignment: Text.AlignRight
                         Layout.alignment: Qt.AlignRight | Qt.AlignVCenter
                     }
-                    Label { text: excelHandler.getNextPONumber(); color: "#3498db"; font.bold: true; Layout.fillWidth: true }
+                    Label { text: Backend.getNextPONumber(); color: Theme.info; font.bold: true; Layout.fillWidth: true }
                     Label {
                         text: "Date:"
                         Layout.minimumWidth: 92; horizontalAlignment: Text.AlignRight
@@ -1679,7 +830,7 @@ ApplicationWindow {
                             Layout.fillWidth: true
                             Layout.minimumWidth: 180
                             editable: true
-                            model: excelHandler.getVendorNames()
+                            model: Backend.getVendorNames()
                         }
                         Button {
                             text: "\u{1F50D}"
@@ -1721,7 +872,7 @@ ApplicationWindow {
                     RowLayout {
                         Layout.fillWidth: true
                         spacing: 6
-                        Label { text: "\u20B9"; font.bold: true; color: "#2c3e50" }
+                        Label { text: "\u20B9"; font.bold: true; color: Theme.textPrimary }
                         TextField {
                             id: poUnitPriceField
                             Layout.fillWidth: true
@@ -1743,8 +894,8 @@ ApplicationWindow {
                     }
                     // Spans both field columns so even a crore total fits.
                     Label {
-                        text: formatRupees(poQtyField.value * parseAmount(poUnitPriceField.text))
-                        color: "#27ae60"
+                        text: Format.rupees(poQtyField.value * Format.amount(poUnitPriceField.text))
+                        color: Theme.success
                         font.bold: true
                         font.pixelSize: 15
                         Layout.columnSpan: 2
@@ -1768,7 +919,7 @@ ApplicationWindow {
                 Layout.preferredHeight: poCartModel.count === 0
                                         ? 64
                                         : Math.min(196, 48 + poCartModel.count * 40)
-                border.color: "#3498db"; radius: 5; color: "#fbfdff"
+                border.color: Theme.info; radius: 5; color: "#fbfdff"
 
                 ColumnLayout {
                     anchors.fill: parent; anchors.margins: 8; spacing: 6
@@ -1780,11 +931,11 @@ ApplicationWindow {
                         Layout.leftMargin: 6; Layout.rightMargin: 6
                         spacing: 10
                         visible: poCartModel.count > 0
-                        Label { text: "Item"; font.bold: true; font.pixelSize: 11; color: "#7f8c8d"; Layout.fillWidth: true }
-                        Label { text: "Vendor"; font.bold: true; font.pixelSize: 11; color: "#7f8c8d"; Layout.preferredWidth: 190 }
-                        Label { text: "Qty"; font.bold: true; font.pixelSize: 11; color: "#7f8c8d"; Layout.preferredWidth: 70; horizontalAlignment: Text.AlignRight }
-                        Label { text: "Rate"; font.bold: true; font.pixelSize: 11; color: "#7f8c8d"; Layout.preferredWidth: 170; horizontalAlignment: Text.AlignRight }
-                        Label { text: "Amount"; font.bold: true; font.pixelSize: 11; color: "#7f8c8d"; Layout.preferredWidth: 180; horizontalAlignment: Text.AlignRight }
+                        Label { text: "Item"; font.bold: true; font.pixelSize: 11; color: Theme.textSecondary; Layout.fillWidth: true }
+                        Label { text: "Vendor"; font.bold: true; font.pixelSize: 11; color: Theme.textSecondary; Layout.preferredWidth: 190 }
+                        Label { text: "Qty"; font.bold: true; font.pixelSize: 11; color: Theme.textSecondary; Layout.preferredWidth: 70; horizontalAlignment: Text.AlignRight }
+                        Label { text: "Rate"; font.bold: true; font.pixelSize: 11; color: Theme.textSecondary; Layout.preferredWidth: 170; horizontalAlignment: Text.AlignRight }
+                        Label { text: "Amount"; font.bold: true; font.pixelSize: 11; color: Theme.textSecondary; Layout.preferredWidth: 180; horizontalAlignment: Text.AlignRight }
                         Item { Layout.preferredWidth: 30 }
                     }
 
@@ -1795,7 +946,7 @@ ApplicationWindow {
                         model: poCartModel
                         delegate: Rectangle {
                             width: poCartView.width; height: 34
-                            color: "#fff"; border.color: "#e0e0e0"; radius: 3
+                            color: "#fff"; border.color: Theme.borderSubtle; radius: 3
                             RowLayout {
                                 anchors.fill: parent
                                 anchors.leftMargin: 6; anchors.rightMargin: 6
@@ -1809,22 +960,22 @@ ApplicationWindow {
                                 }
                                 Label {
                                     text: model.vendor
-                                    font.pixelSize: 11; color: "#7f8c8d"
+                                    font.pixelSize: 11; color: Theme.textSecondary
                                     Layout.preferredWidth: 190; elide: Text.ElideRight
                                 }
                                 Label {
                                     text: model.qty
-                                    font.pixelSize: 11; color: "#2c3e50"
+                                    font.pixelSize: 11; color: Theme.textPrimary
                                     Layout.preferredWidth: 70; horizontalAlignment: Text.AlignRight
                                 }
                                 Label {
-                                    text: formatRupees(model.unitPrice)
-                                    font.pixelSize: 11; color: "#2c3e50"
+                                    text: Format.rupees(model.unitPrice)
+                                    font.pixelSize: 11; color: Theme.textPrimary
                                     Layout.preferredWidth: 170; horizontalAlignment: Text.AlignRight
                                 }
                                 Label {
-                                    text: formatRupees(model.lineTotal)
-                                    font.pixelSize: 12; font.bold: true; color: "#27ae60"
+                                    text: Format.rupees(model.lineTotal)
+                                    font.pixelSize: 12; font.bold: true; color: Theme.success
                                     Layout.preferredWidth: 180; horizontalAlignment: Text.AlignRight
                                 }
                                 Button {
@@ -1832,7 +983,7 @@ ApplicationWindow {
                                     ToolTip.visible: hovered
                                     ToolTip.text: "Remove this item"
                                     onClicked: { poCartModel.remove(index); recalcPoCartTotal() }
-                                    contentItem: Text { text: "X"; color: "#e74c3c"; font.pixelSize: 11; font.bold: true; horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter }
+                                    contentItem: Text { text: "X"; color: Theme.danger; font.pixelSize: 11; font.bold: true; horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter }
                                 }
                             }
                         }
@@ -1842,7 +993,7 @@ ApplicationWindow {
                 Label {
                     anchors.centerIn: parent
                     text: "No items added - use \"+ Add Item\" above (a PO can hold several items)"
-                    visible: poCartModel.count === 0; color: "#95a5a6"; font.pixelSize: 11
+                    visible: poCartModel.count === 0; color: Theme.textMuted; font.pixelSize: 11
                 }
             }
 
@@ -1893,14 +1044,14 @@ ApplicationWindow {
                 // Reads back the period so the requirement is unmistakable, and
                 // says so plainly when the dates are the wrong way round.
                 Label {
-                    property int days: periodDays(poExpectedField.text, poExpectedEndField.text)
+                    property int days: Format.periodDays(poExpectedField.text, poExpectedEndField.text)
                     property bool reversed: poExpectedField.text !== "" &&
                                             poExpectedEndField.text !== "" &&
                                             poExpectedEndField.text < poExpectedField.text
                     text: reversed
                           ? "End date is before the start date"
                           : (days > 0 ? days + (days === 1 ? " day" : " days") : "")
-                    color: reversed ? "#e74c3c" : "#7f8c8d"
+                    color: reversed ? Theme.danger : Theme.textSecondary
                     font.pixelSize: 11
                     font.bold: reversed
                 }
@@ -1912,7 +1063,7 @@ ApplicationWindow {
                     id: poPreparedByField
                     Layout.preferredWidth: 180
                     placeholderText: "Enter preparer name"
-                    text: excelHandler.currentUser
+                    text: Backend.currentUser
                     selectByMouse: true
                 }
             }
@@ -1929,13 +1080,13 @@ ApplicationWindow {
                     Layout.preferredWidth: 260
                     Layout.preferredHeight: 38
                     Layout.leftMargin: 6
-                    color: "#eafaf1"; border.color: "#27ae60"; radius: 4
+                    color: "#eafaf1"; border.color: Theme.success; radius: 4
                     RowLayout {
                         anchors.fill: parent; anchors.leftMargin: 10; anchors.rightMargin: 10
-                        Label { text: "Total"; font.bold: true; color: "#2c3e50"; font.pixelSize: 12 }
+                        Label { text: "Total"; font.bold: true; color: Theme.textPrimary; font.pixelSize: 12 }
                         Label {
-                            text: formatRupees(poCartTotal)
-                            font.bold: true; font.pixelSize: 15; color: "#27ae60"
+                            text: Format.rupees(poCartTotal)
+                            font.bold: true; font.pixelSize: 15; color: Theme.success
                             Layout.fillWidth: true
                             horizontalAlignment: Text.AlignRight
                         }
@@ -1964,7 +1115,7 @@ ApplicationWindow {
                                 qty: it.qty, unitPrice: it.unitPrice
                             })
                         }
-                        var poNo = excelHandler.createPurchaseOrderItems(
+                        var poNo = Backend.createPurchaseOrderItems(
                             items, poExpectedField.text, poExpectedEndField.text,
                             poPreparedByField.text)
                         if (poNo !== "") {
@@ -1976,7 +1127,7 @@ ApplicationWindow {
                             // Only now that the order really exists is the
                             // request marked as bought.
                             if (root.poFromRequest !== "") {
-                                excelHandler.linkRequestToPO(root.poFromRequest, poNo)
+                                Backend.linkRequestToPO(root.poFromRequest, poNo)
                                 statusLabel.text = poNo + " raised for " + root.poFromRequest
                                 statusTimer.restart()
                                 root.poFromRequest = ""
@@ -2028,15 +1179,15 @@ ApplicationWindow {
                     text: poSearchField.text.trim() === ""
                           ? poListModel.count + (poListModel.count === 1 ? " PO" : " POs")
                           : poListModel.count + " of " + poRowsCache.length + " match"
-                    color: "#7f8c8d"; font.pixelSize: 11
+                    color: Theme.textSecondary; font.pixelSize: 11
                 }
-                Label { text: "Pending: " + excelHandler.pendingPOCount; font.bold: true; color: "#e67e22" }
+                Label { text: "Pending: " + Backend.pendingPOCount; font.bold: true; color: Theme.warning }
             }
 
             // PO List
             Rectangle {
                 Layout.fillWidth: true; Layout.fillHeight: true
-                border.color: "#dee2e6"; radius: 5
+                border.color: Theme.border; radius: 5
 
                 ListView {
                     id: poListView; anchors.fill: parent; anchors.margins: 5; clip: true; spacing: 4
@@ -2044,11 +1195,11 @@ ApplicationWindow {
                     delegate: Rectangle {
                         width: poListView.width - 10; height: 78
                         color: {
-                            if (model.status === "Received") return "#e8f8e8"
-                            if (model.status === "Draft") return "#fff8e8"
+                            if (model.status === "Received") return Theme.successWash
+                            if (model.status === "Draft") return Theme.warningWash
                             return "#fff"
                         }
-                        border.color: "#e0e0e0"; radius: 4
+                        border.color: Theme.borderSubtle; radius: 4
 
                         RowLayout {
                             anchors.fill: parent; anchors.margins: 10
@@ -2057,31 +1208,31 @@ ApplicationWindow {
                                 Layout.fillWidth: true; Layout.minimumWidth: 180; spacing: 3
                                 RowLayout {
                                     spacing: 8
-                                    Label { text: model.poNo; font.bold: true; font.pixelSize: 13; color: "#2c3e50" }
+                                    Label { text: model.poNo; font.bold: true; font.pixelSize: 13; color: Theme.textPrimary }
                                     Label {
                                         text: model.status
                                         font.pixelSize: 11; font.bold: true
                                         color: {
-                                            if (model.status === "Draft") return "#f39c12"
-                                            if (model.status === "Sent") return "#3498db"
-                                            if (model.status === "Received") return "#27ae60"
-                                            if (model.status === "Partially Received") return "#e67e22"
-                                            return "#95a5a6"
+                                            if (model.status === "Draft") return Theme.pending
+                                            if (model.status === "Sent") return Theme.info
+                                            if (model.status === "Received") return Theme.success
+                                            if (model.status === "Partially Received") return Theme.warning
+                                            return Theme.textMuted
                                         }
                                     }
                                 }
                                 Label {
                                     text: model.partName + "  |  Qty: " + model.qty + "  |  Vendor: " + model.vendor
-                                    font.pixelSize: 11; color: "#7f8c8d"
+                                    font.pixelSize: 11; color: Theme.textSecondary
                                     Layout.fillWidth: true; elide: Text.ElideRight
                                 }
                                 Label {
                                     text: "Date: " + model.date +
-                                          "  |  Needed: " + formatPeriod(model.expectedDate, model.expectedEndDate) +
+                                          "  |  Needed: " + Format.period(model.expectedDate, model.expectedEndDate) +
                                           "  |  Received: " + model.receivedQty + "/" + model.qty +
                                           "  |  Rec Date: " + (model.receivedDate || "-")
                                     font.pixelSize: 10
-                                    color: "#95a5a6"
+                                    color: Theme.textMuted
                                     Layout.fillWidth: true; elide: Text.ElideRight
                                 }
                             }
@@ -2093,18 +1244,18 @@ ApplicationWindow {
                                 Layout.alignment: Qt.AlignVCenter
                                 spacing: 2
                                 Label {
-                                    text: formatRupees(model.totalAmount)
-                                    font.bold: true; font.pixelSize: 14; color: "#27ae60"
+                                    text: Format.rupees(model.totalAmount)
+                                    font.bold: true; font.pixelSize: 14; color: Theme.success
                                     Layout.fillWidth: true; horizontalAlignment: Text.AlignRight
                                 }
                                 Label {
                                     // A single rate only means something on a
                                     // one-line PO; otherwise show the line count.
                                     text: model.unitPrice > 0
-                                          ? formatRupees(model.unitPrice) + " / unit"
+                                          ? Format.rupees(model.unitPrice) + " / unit"
                                           : (model.itemCount > 1 ? model.itemCount + " line items" : "")
                                     visible: text !== ""
-                                    font.pixelSize: 10; color: "#95a5a6"
+                                    font.pixelSize: 10; color: Theme.textMuted
                                     Layout.fillWidth: true; horizontalAlignment: Text.AlignRight
                                 }
                             }
@@ -2132,10 +1283,10 @@ ApplicationWindow {
                                         receivedBy: model.receivedBy || "",
                                         receivedDate: model.receivedDate || ""
                                     }
-                                    selectedPOItems = excelHandler.getPOItems(model.poNo)
+                                    selectedPOItems = Backend.getPOItems(model.poNo)
                                     poDetailsDialog.open()
                                 }
-                                contentItem: Text { text: "View"; color: "#2c3e50"; font.pixelSize: 11 }
+                                contentItem: Text { text: "View"; color: Theme.textPrimary; font.pixelSize: 11 }
                             }
                             Button {
                                 text: "Edit"
@@ -2148,10 +1299,10 @@ ApplicationWindow {
                                     editPoPartNoField.text = model.partNo || ""
                                     editPoDepartmentField.text = model.department || ""
                                     editPoQtyField.value = model.qty || 1
-                                    editPoUnitPriceField.text = formatAmount(model.unitPrice)
+                                    editPoUnitPriceField.text = Format.fixed(model.unitPrice)
                                     editPoExpectedField.text = model.expectedDate || ""
                                     editPoExpectedEndField.text = model.expectedEndDate || ""
-                                    editPoPreparedByField.text = model.preparedBy || excelHandler.currentUser
+                                    editPoPreparedByField.text = model.preparedBy || Backend.currentUser
                                     poEditDialog.open()
                                 }
                                 contentItem: Text { text: "Edit"; color: "#8e44ad"; font.pixelSize: 11 }
@@ -2164,7 +1315,7 @@ ApplicationWindow {
                                     approvedByField.text = ""
                                     approvalDialog.open()
                                 }
-                                contentItem: Text { text: "Send"; color: "#3498db"; font.pixelSize: 11 }
+                                contentItem: Text { text: "Send"; color: Theme.info; font.pixelSize: 11 }
                             }
                             Button {
                                 text: "Receive"
@@ -2173,16 +1324,16 @@ ApplicationWindow {
                                     grnPOFieldText = model.poNo
                                     grnLoadItems(model.poNo)
                                     grnRejectedField.value = 0
-                                    grnReceivedByField.text = excelHandler.currentUser
+                                    grnReceivedByField.text = Backend.currentUser
                                     grnDialog.open()
                                 }
-                                contentItem: Text { text: "Receive"; color: "#27ae60"; font.pixelSize: 11 }
+                                contentItem: Text { text: "Receive"; color: Theme.success; font.pixelSize: 11 }
                             }
                             Button {
                                 text: "Close"
                                 visible: model.status === "Received"
-                                onClicked: { excelHandler.updatePOStatus(model.poNo, "Closed"); refreshPOList() }
-                                contentItem: Text { text: "Close"; color: "#95a5a6"; font.pixelSize: 11 }
+                                onClicked: { Backend.updatePOStatus(model.poNo, "Closed"); refreshPOList() }
+                                contentItem: Text { text: "Close"; color: Theme.textMuted; font.pixelSize: 11 }
                             }
                         }
                     }
@@ -2196,7 +1347,7 @@ ApplicationWindow {
                     text: poSearchField.text.trim() === ""
                           ? "No purchase orders"
                           : "No purchase orders match \"" + poSearchField.text.trim() + "\""
-                    visible: poListModel.count === 0; color: "#95a5a6"
+                    visible: poListModel.count === 0; color: Theme.textMuted
                 }
             }
 
@@ -2215,31 +1366,10 @@ ApplicationWindow {
         onClosed: root.poFromRequest = ""
     }
 
-    Dialog {
+    PoApprovalDialog {
         id: approvalDialog
-        title: "Approve PO"
-        modal: true
-        anchors.centerIn: parent
-        standardButtons: Dialog.Ok | Dialog.Cancel
-        width: 380
-
-        ColumnLayout {
-            spacing: 10
-            Label { text: "PO: " + pendingPOForApproval; font.bold: true }
-            Label { text: "Approved By*:" }
-            TextField {
-                id: approvedByField
-                Layout.fillWidth: true
-                placeholderText: "Enter approver name"
-                selectByMouse: true
-            }
-        }
-
-        onAccepted: {
-            if (excelHandler.sendPOForApproval(pendingPOForApproval, approvedByField.text)) {
-                refreshPOList()
-            }
-        }
+        poNo: root.pendingPOForApproval
+        onOrderChanged: refreshPOList()
     }
 
     Dialog {
@@ -2254,7 +1384,7 @@ ApplicationWindow {
             spacing: 10
             width: parent.width
 
-            Label { text: "PO: " + editingPONumber; font.bold: true; color: "#2c3e50" }
+            Label { text: "PO: " + editingPONumber; font.bold: true; color: Theme.textPrimary }
 
             GridLayout {
                 columns: 2
@@ -2331,10 +1461,10 @@ ApplicationWindow {
             }
 
             Label {
-                text: "Total: " + formatRupees(editPoQtyField.value * parseAmount(editPoUnitPriceField.text))
+                text: "Total: " + Format.rupees(editPoQtyField.value * Format.amount(editPoUnitPriceField.text))
                 font.bold: true
                 font.pixelSize: 15
-                color: "#27ae60"
+                color: Theme.success
                 Layout.fillWidth: true
                 horizontalAlignment: Text.AlignRight
             }
@@ -2353,245 +1483,40 @@ ApplicationWindow {
                     partNo: editPoPartNoField.text,
                     department: editPoDepartmentField.text,
                     qty: editPoQtyField.value,
-                    unitPrice: parseAmount(editPoUnitPriceField.text),
+                    unitPrice: Format.amount(editPoUnitPriceField.text),
                     expectedDate: editPoExpectedField.text,
                     expectedEndDate: editPoExpectedEndField.text,
                     preparedBy: editPoPreparedByField.text
                 }
 
-            if (excelHandler.updatePurchaseOrder(editingPONumber, payload)) {
+            if (Backend.updatePurchaseOrder(editingPONumber, payload)) {
                 refreshPOList()
             }
         }
     }
 
-    Dialog {
+    PoDetailsDialog {
         id: poDetailsDialog
-        title: "PO Details"
-        modal: true
-        anchors.centerIn: parent
-        standardButtons: Dialog.Ok
-        width: 680
-
-        ColumnLayout {
-            anchors.fill: parent
-            spacing: 8
-
-            Label { text: "PO No: " + (selectedPODetails.poNo || "-"); font.bold: true; color: "#2c3e50" }
-
-            // Line items of this PO (each with its own vendor)
-            Label { text: "Items (" + selectedPOItems.length + "):"; font.bold: true }
-            Repeater {
-                model: selectedPOItems
-                Label {
-                    text: "  " + (index + 1) + ". " + (modelData.partName || "-") +
-                          " (" + (modelData.partNo || "-") + ")  x" + (modelData.qty || 0) +
-                          " @ " + formatRupees(modelData.unitPrice || 0) +
-                          "  | Vendor: " + (modelData.vendor || "-") +
-                          "  | Recv: " + (modelData.receivedQty || 0) + "/" + (modelData.qty || 0)
-                    font.pixelSize: 12
-                    Layout.fillWidth: true
-                    wrapMode: Text.WordWrap
-                }
-            }
-
-            Label { text: "Department: " + (selectedPODetails.department || "-"); visible: selectedPOItems.length <= 1 }
-            Label { text: "Vendor(s): " + (selectedPODetails.vendor || "-") }
-            Label { text: "Total Qty: " + (selectedPODetails.qty || 0) }
-            Label { text: "Total Price: " + formatRupees(selectedPODetails.totalAmount || 0); font.bold: true; color: "#27ae60" }
-            Label {
-                text: "Needed Period: " + formatPeriod(selectedPODetails.expectedDate,
-                                                       selectedPODetails.expectedEndDate)
-                font.bold: true
-            }
-            Label { text: "Status: " + (selectedPODetails.status || "-") }
-            Label { text: "Prepared By: " + (selectedPODetails.preparedBy || "-") }
-            Label { text: "Approved By: " + (selectedPODetails.approvedBy || "-") }
-            Label { text: "Received By: " + (selectedPODetails.receivedBy || "-") }
-            Label { text: "Received Date: " + (selectedPODetails.receivedDate || "-") }
-            Label { text: "Received Qty: " + (selectedPODetails.receivedQty || 0) + " / " + (selectedPODetails.qty || 0) }
-        }
+        order: root.selectedPODetails
+        lineItems: root.selectedPOItems
     }
 
-    Dialog {
+    PoPdfPreviewDialog {
         id: poPdfPreviewDialog
-        title: "Purchase Order " + poPreviewPoNo
-        modal: true
-        anchors.centerIn: parent
-        width: Math.min(root.width - 80, 940)
-        height: Math.min(root.height - 60, 900)
-        standardButtons: Dialog.NoButton
-
-        ColumnLayout {
-            anchors.fill: parent
-            spacing: 8
-
-            RowLayout {
-                Layout.fillWidth: true
-                spacing: 8
-                Label { text: "Comments:" }
-                TextField {
-                    id: poPreviewCommentsField
-                    Layout.fillWidth: true
-                    placeholderText: "Optional special instructions printed on the order"
-                    selectByMouse: true
-                    // Re-render on commit rather than per keystroke; a full
-                    // re-layout per character would be wasteful.
-                    onEditingFinished: if (poPreviewPoNo !== "") refreshPoPdfPreview()
-                }
-            }
-
-            Rectangle {
-                Layout.fillWidth: true
-                Layout.fillHeight: true
-                color: "#525659"
-                radius: 4
-
-                ListView {
-                    id: poPreviewView
-                    anchors.fill: parent
-                    anchors.margins: 10
-                    clip: true
-                    spacing: 12
-                    model: poPreviewPages
-                    ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded }
-
-                    delegate: Rectangle {
-                        width: poPreviewView.width - 20
-                        // A4 aspect ratio, so the page keeps its proportions
-                        // whatever the dialog is resized to.
-                        height: width * 297 / 210
-                        color: "white"
-                        border.color: "#2c2c2c"
-
-                        Image {
-                            anchors.fill: parent
-                            source: modelData
-                            fillMode: Image.PreserveAspectFit
-                            smooth: true
-                            asynchronous: true
-                            cache: false
-                        }
-                    }
-                }
-            }
-
-            RowLayout {
-                Layout.fillWidth: true
-                spacing: 8
-
-                Label {
-                    text: poPreviewPages.length + (poPreviewPages.length === 1 ? " page" : " pages")
-                    font.pixelSize: 11
-                    color: "#7f8c8d"
-                }
-
-                Item { Layout.fillWidth: true }
-
-                Button {
-                    text: "Open in PDF viewer"
-                    onClicked: excelHandler.openInSystemViewer(poPreviewPdfPath)
-                }
-                Button {
-                    text: "Close"
-                    onClicked: poPdfPreviewDialog.close()
-                }
-                Button {
-                    text: "Send"
-                    highlighted: true
-                    ToolTip.visible: hovered
-                    ToolTip.text: "Save this purchase order as a PDF on this computer"
-                    onClicked: sendPoPdf()
-                }
-            }
-        }
+        poNo: root.poPreviewPoNo
+        pages: root.poPreviewPages
+        pdfPath: root.poPreviewPdfPath
+        onRefreshRequested: refreshPoPdfPreview()
+        onSendRequested: sendPoPdf()
     }
 
-    Dialog {
+    PoSavedDialog {
         id: poSavedDialog
-        title: "Purchase Order Saved"
-        modal: true
-        anchors.centerIn: parent
-        standardButtons: Dialog.Ok
-        width: 560
-
-        ColumnLayout {
-            anchors.fill: parent
-            spacing: 10
-            Label { text: "The purchase order PDF has been saved to:"; font.bold: true }
-            Label {
-                text: poLastSavedPdf
-                wrapMode: Text.WrapAnywhere
-                Layout.fillWidth: true
-                color: "#2c3e50"
-            }
-            Button {
-                text: "Open the file"
-                onClicked: excelHandler.openInSystemViewer(poLastSavedPdf)
-            }
-        }
+        pdfPath: root.poLastSavedPdf
     }
 
-    Dialog {
+    CompanyProfileDialog {
         id: companyProfileDialog
-        title: "Company Profile"
-        modal: true
-        anchors.centerIn: parent
-        standardButtons: Dialog.Save | Dialog.Cancel
-        width: 560
-
-        // These details head every printed purchase order, so they are worth
-        // filling in once before sending anything to a vendor.
-        onOpened: {
-            var c = excelHandler.getCompanyProfile()
-            companyNameField.text = c.name || ""
-            companyAddr1Field.text = c.addressLine1 || ""
-            companyAddr2Field.text = c.addressLine2 || ""
-            companyCityField.text = c.city || ""
-            companyPhoneField.text = c.phone || ""
-            companyEmailField.text = c.email || ""
-            companyWebsiteField.text = c.website || ""
-            companyGstinField.text = c.gstin || ""
-        }
-
-        onAccepted: {
-            excelHandler.saveCompanyProfile({
-                name: companyNameField.text,
-                addressLine1: companyAddr1Field.text,
-                addressLine2: companyAddr2Field.text,
-                city: companyCityField.text,
-                phone: companyPhoneField.text,
-                email: companyEmailField.text,
-                website: companyWebsiteField.text,
-                gstin: companyGstinField.text
-            })
-            statusLabel.text = "Company profile saved"
-            statusTimer.restart()
-        }
-
-        GridLayout {
-            anchors.fill: parent
-            columns: 2
-            columnSpacing: 10
-            rowSpacing: 8
-
-            Label { text: "Company Name:" }
-            TextField { id: companyNameField; Layout.fillWidth: true; selectByMouse: true }
-            Label { text: "Address Line 1:" }
-            TextField { id: companyAddr1Field; Layout.fillWidth: true; selectByMouse: true }
-            Label { text: "Address Line 2:" }
-            TextField { id: companyAddr2Field; Layout.fillWidth: true; selectByMouse: true }
-            Label { text: "City / State:" }
-            TextField { id: companyCityField; Layout.fillWidth: true; selectByMouse: true }
-            Label { text: "Phone:" }
-            TextField { id: companyPhoneField; Layout.fillWidth: true; selectByMouse: true }
-            Label { text: "Email:" }
-            TextField { id: companyEmailField; Layout.fillWidth: true; selectByMouse: true }
-            Label { text: "Website:" }
-            TextField { id: companyWebsiteField; Layout.fillWidth: true; selectByMouse: true }
-            Label { text: "GSTIN:" }
-            TextField { id: companyGstinField; Layout.fillWidth: true; selectByMouse: true }
-        }
     }
 
     Dialog {
@@ -2624,18 +1549,18 @@ ApplicationWindow {
             Label {
                 text: poPartPickerModel.count + (poPartPickerModel.count === 1 ? " item" : " items")
                 font.pixelSize: 11
-                color: "#7f8c8d"
+                color: Theme.textSecondary
             }
 
             Rectangle {
                 Layout.fillWidth: true; Layout.fillHeight: true
-                border.color: "#dee2e6"; radius: 5
+                border.color: Theme.border; radius: 5
 
                 Label {
                     anchors.centerIn: parent
                     visible: poPartPickerModel.count === 0
                     text: "No matching items"
-                    color: "#95a5a6"
+                    color: Theme.textMuted
                 }
 
                 ListView {
@@ -2646,20 +1571,20 @@ ApplicationWindow {
                     delegate: Rectangle {
                         width: poPartPickerView.width - 10; height: 58
                         color: partPickerMouse.containsMouse ? "#eaf4fd" : "#fff"
-                        border.color: "#e0e0e0"; radius: 4
+                        border.color: Theme.borderSubtle; radius: 4
 
                         ColumnLayout {
                             anchors.fill: parent; anchors.margins: 8; spacing: 2
                             Label {
                                 text: model.partName + (model.partNo !== "" ? "  (" + model.partNo + ")" : "")
-                                font.bold: true; font.pixelSize: 13; color: "#2c3e50"
+                                font.bold: true; font.pixelSize: 13; color: Theme.textPrimary
                                 elide: Text.ElideRight; Layout.fillWidth: true
                             }
                             Label {
                                 text: "Dept: " + (model.department !== "" ? model.department : "-")
                                       + "  |  Vendor: " + (model.vendor !== "" ? model.vendor : "-")
-                                      + "  |  " + formatRupees(model.unitPrice)
-                                font.pixelSize: 11; color: "#7f8c8d"
+                                      + "  |  " + Format.rupees(model.unitPrice)
+                                font.pixelSize: 11; color: Theme.textSecondary
                                 elide: Text.ElideRight; Layout.fillWidth: true
                             }
                         }
@@ -2705,18 +1630,18 @@ ApplicationWindow {
             Label {
                 text: poVendorPickerModel.count + (poVendorPickerModel.count === 1 ? " vendor" : " vendors")
                 font.pixelSize: 11
-                color: "#7f8c8d"
+                color: Theme.textSecondary
             }
 
             Rectangle {
                 Layout.fillWidth: true; Layout.fillHeight: true
-                border.color: "#dee2e6"; radius: 5
+                border.color: Theme.border; radius: 5
 
                 Label {
                     anchors.centerIn: parent
                     visible: poVendorPickerModel.count === 0
                     text: "No matching vendors"
-                    color: "#95a5a6"
+                    color: Theme.textMuted
                 }
 
                 ListView {
@@ -2727,20 +1652,20 @@ ApplicationWindow {
                     delegate: Rectangle {
                         width: poVendorPickerView.width - 10; height: 58
                         color: vendorPickerMouse.containsMouse ? "#eaf4fd" : "#fff"
-                        border.color: "#e0e0e0"; radius: 4
+                        border.color: Theme.borderSubtle; radius: 4
 
                         ColumnLayout {
                             anchors.fill: parent; anchors.margins: 8; spacing: 2
                             Label {
                                 text: model.name
-                                font.bold: true; font.pixelSize: 13; color: "#2c3e50"
+                                font.bold: true; font.pixelSize: 13; color: Theme.textPrimary
                                 elide: Text.ElideRight; Layout.fillWidth: true
                             }
                             Label {
                                 text: (model.contactPerson !== "" ? model.contactPerson + "  |  " : "")
                                       + (model.phone !== "" ? model.phone : "-")
                                       + (model.email !== "" ? "  |  " + model.email : "")
-                                font.pixelSize: 11; color: "#7f8c8d"
+                                font.pixelSize: 11; color: Theme.textSecondary
                                 elide: Text.ElideRight; Layout.fillWidth: true
                             }
                         }
@@ -2758,140 +1683,14 @@ ApplicationWindow {
         }
     }
 
-    Dialog {
+    PoPartDetailsDialog {
         id: poPartDetailsDialog
-        title: "Item Master Details"
-        modal: true
-        anchors.centerIn: parent
-        standardButtons: Dialog.Ok
-        width: 430
-
-        ColumnLayout {
-            anchors.fill: parent
-            spacing: 10
-
-            Label { text: "Part Name: " + (selectedPoPartDetails.partName || "-"); font.bold: true; color: "#2c3e50" }
-            Label { text: "Part No: " + (selectedPoPartDetails.partNo || "-") }
-            Label { text: "Department: " + (selectedPoPartDetails.department || "-") }
-            Label { text: "Required Quantity: " + (selectedPoPartDetails.requiredQty || 0) }
-            Label { text: "Unit Price: " + formatRupees(selectedPoPartDetails.unitPrice || 0); color: "#27ae60"; font.bold: true }
-            Label { text: "Preferred Vendor: " + (selectedPoPartDetails.vendor || "-") }
-        }
+        part: root.selectedPoPartDetails
     }
 
     // Shared by every date field in the PO screens; openDatePicker() below sets
     // which field the pick lands in and what to seed the calendar with.
-    Dialog {
-        id: expectedDateDialog
-        title: "Select " + purpose
-        modal: true
-        anchors.centerIn: parent
-        standardButtons: Dialog.Ok | Dialog.Cancel
-        width: 420
-        height: 420
-        property int displayMonth: (new Date()).getMonth() + 1
-        property int displayYear: (new Date()).getFullYear()
-        property date selectedDate: new Date()
-        property var targetField: null
-        property string purpose: "Date"
-        property string seedText: ""
-
-        onOpened: {
-            var parsed = new Date(seedText)
-            if (!isNaN(parsed.getTime())) {
-                selectedDate = parsed
-            } else {
-                selectedDate = new Date()
-            }
-            displayMonth = selectedDate.getMonth() + 1
-            displayYear = selectedDate.getFullYear()
-        }
-
-        onAccepted: {
-            if (targetField) targetField.text = Qt.formatDate(selectedDate, "yyyy-MM-dd")
-        }
-
-        ColumnLayout {
-            anchors.fill: parent
-            RowLayout {
-                Layout.fillWidth: true
-                Button {
-                    text: "<"
-                    onClicked: {
-                        expectedDateDialog.displayMonth--
-                        if (expectedDateDialog.displayMonth < 1) {
-                            expectedDateDialog.displayMonth = 12
-                            expectedDateDialog.displayYear--
-                        }
-                    }
-                }
-                Label {
-                    Layout.fillWidth: true
-                    horizontalAlignment: Text.AlignHCenter
-                    text: Qt.formatDate(new Date(expectedDateDialog.displayYear,
-                                                 expectedDateDialog.displayMonth - 1, 1),
-                                        "MMMM yyyy")
-                    font.bold: true
-                }
-                Button {
-                    text: ">"
-                    onClicked: {
-                        expectedDateDialog.displayMonth++
-                        if (expectedDateDialog.displayMonth > 12) {
-                            expectedDateDialog.displayMonth = 1
-                            expectedDateDialog.displayYear++
-                        }
-                    }
-                }
-            }
-
-            BasicControls.DayOfWeekRow {
-                locale: Qt.locale()
-                Layout.fillWidth: true
-            }
-
-            BasicControls.MonthGrid {
-                id: expectedDateMonthGrid
-                month: expectedDateDialog.displayMonth
-                year: expectedDateDialog.displayYear
-                locale: Qt.locale()
-                Layout.fillWidth: true
-                Layout.fillHeight: true
-
-                onClicked: function(date) {
-                    expectedDateDialog.selectedDate = date
-                }
-
-                delegate: Rectangle {
-                    required property var model
-                    color: {
-                        var selected = Qt.formatDate(expectedDateDialog.selectedDate, "yyyy-MM-dd")
-                        var current = Qt.formatDate(model.date, "yyyy-MM-dd")
-                        if (selected === current) return "#3498db"
-                        return "transparent"
-                    }
-                    radius: width / 2
-
-                    Text {
-                        anchors.centerIn: parent
-                        text: model.day
-                        color: {
-                            if (Qt.formatDate(expectedDateDialog.selectedDate, "yyyy-MM-dd") ===
-                                Qt.formatDate(model.date, "yyyy-MM-dd")) {
-                                return "white"
-                            }
-                            return model.month === expectedDateMonthGrid.month ? "#2c3e50" : "#bdc3c7"
-                        }
-                    }
-
-                    MouseArea {
-                        anchors.fill: parent
-                        onClicked: expectedDateDialog.selectedDate = model.date
-                    }
-                }
-            }
-        }
-    }
+    DatePickerDialog { id: expectedDateDialog }
 
     // Rows for the current status filter, plus the poNo -> searchable-text map
     // from the backend. Both are fetched once per refresh so typing in the
@@ -2901,8 +1700,8 @@ ApplicationWindow {
 
     function refreshPOList() {
         var filter = poFilterCombo.currentText === "All" ? "" : poFilterCombo.currentText
-        poRowsCache = excelHandler.getPOList(filter)
-        poSearchIndex = excelHandler.getPOSearchIndex()
+        poRowsCache = Backend.getPOList(filter)
+        poSearchIndex = Backend.getPOSearchIndex()
         applyPoSearch()
     }
 
@@ -2963,7 +1762,7 @@ ApplicationWindow {
         if (details === undefined || details === null) return
         prPartNoField.text = details.partNo || ""
         prUnitField.text = details.unit || ""
-        prEstPriceField.text = formatAmount(details.unitPrice)
+        prEstPriceField.text = Format.fixed(details.unitPrice)
         if ((details.vendor || "").toString().trim() !== "")
             prVendorField.editText = details.vendor
     }
@@ -2989,7 +1788,7 @@ ApplicationWindow {
             partNo: prPartNoField.text.trim(),
             qty: prQtyField.value,
             unit: prUnitField.text.trim(),
-            estimatedPrice: parseAmount(prEstPriceField.text),
+            estimatedPrice: Format.amount(prEstPriceField.text),
             vendor: (prVendorField.editText || prVendorField.currentText || "").toString().trim()
         })
         clearPrLineFields()
@@ -3003,13 +1802,13 @@ ApplicationWindow {
         prNeededByField.text = ""
         prPriorityCombo.currentIndex = 0
         prRemarksField.text = ""
-        prRequestedByField.text = excelHandler.currentUser
+        prRequestedByField.text = Backend.currentUser
     }
 
     // Pulls a pending request back into the form so the person who raised it
     // can correct it before anyone reviews it.
     function loadPrForEdit(prNo) {
-        var pr = excelHandler.getPRByNumber(prNo)
+        var pr = Backend.getPRByNumber(prNo)
         if (!pr || pr.prNo === undefined) return
 
         clearPrForm()
@@ -3020,7 +1819,7 @@ ApplicationWindow {
         prRemarksField.text = pr.remarks || ""
         prRequestedByField.text = pr.requestedBy || ""
 
-        var lines = excelHandler.getPRItems(prNo)
+        var lines = Backend.getPRItems(prNo)
         for (var i = 0; i < lines.length; i++) {
             prCartModel.append({
                 itemName: lines[i].itemName || "",
@@ -3058,7 +1857,7 @@ ApplicationWindow {
     function submitPurchaseRequest() {
         var items = prCartItems()
         if (editingPRNumber !== "") {
-            if (!excelHandler.updatePurchaseRequest(editingPRNumber, prFormPayload(), items)) return
+            if (!Backend.updatePurchaseRequest(editingPRNumber, prFormPayload(), items)) return
             statusLabel.text = editingPRNumber + " updated"
             statusTimer.restart()
             clearPrForm()
@@ -3066,7 +1865,7 @@ ApplicationWindow {
             return
         }
 
-        var created = excelHandler.createPurchaseRequest(prFormPayload(), items)
+        var created = Backend.createPurchaseRequest(prFormPayload(), items)
         if (created === "") return
         clearPrForm()
         refreshPRList()
@@ -3074,8 +1873,8 @@ ApplicationWindow {
 
     function refreshPRList() {
         var filter = prFilterCombo.currentText === "All" ? "" : prFilterCombo.currentText
-        prRowsCache = excelHandler.getPRList(filter)
-        prSearchIndex = excelHandler.getPRSearchIndex()
+        prRowsCache = Backend.getPRList(filter)
+        prSearchIndex = Backend.getPRSearchIndex()
         applyPrSearch()
     }
 
@@ -3098,7 +1897,7 @@ ApplicationWindow {
     // Hands an approved request over to the purchase order form: its lines
     // become the order's cart, and the two are linked once the order is made.
     function raisePOForRequest(prNo) {
-        var lines = excelHandler.getPRItems(prNo)
+        var lines = Backend.getPRItems(prNo)
         if (lines.length === 0) {
             statusLabel.text = prNo + " has no items"; statusTimer.restart(); return
         }
@@ -3110,7 +1909,7 @@ ApplicationWindow {
                 partName: l.itemName || "",
                 partNo: l.partNo || "",
                 vendor: l.vendor || "",
-                department: excelHandler.getPRByNumber(prNo).department || "",
+                department: Backend.getPRByNumber(prNo).department || "",
                 qty: l.qty || 0,
                 unitPrice: l.estimatedPrice || 0,
                 lineTotal: (l.qty || 0) * (l.estimatedPrice || 0)
@@ -3118,7 +1917,7 @@ ApplicationWindow {
         }
         recalcPoCartTotal()
 
-        var pr = excelHandler.getPRByNumber(prNo)
+        var pr = Backend.getPRByNumber(prNo)
         poExpectedField.text = pr.neededBy || ""
         poExpectedEndField.text = ""
         poFromRequest = prNo
@@ -3143,13 +1942,13 @@ ApplicationWindow {
 
             RowLayout {
                 Layout.fillWidth: true
-                Label { text: "Purchase Requests"; font.bold: true; font.pixelSize: 16; color: "#2c3e50" }
+                Label { text: "Purchase Requests"; font.bold: true; font.pixelSize: 16; color: Theme.textPrimary }
                 Item { Layout.fillWidth: true }
                 Label {
                     text: loginDialog.isAuthenticated
                           ? "Everyone can see this queue. Supply chain approves a request, then raises the order."
                           : "Log in to raise or review a request."
-                    font.pixelSize: 10; color: "#95a5a6"
+                    font.pixelSize: 10; color: Theme.textMuted
                 }
             }
 
@@ -3157,7 +1956,7 @@ ApplicationWindow {
             Rectangle {
                 Layout.fillWidth: true
                 Layout.preferredHeight: prEntryGrid.implicitHeight + 2 * prEntryGrid.anchors.margins
-                color: "#fdf5ea"; border.color: "#e67e22"; radius: 5
+                color: "#fdf5ea"; border.color: Theme.warning; radius: 5
 
                 GridLayout {
                     id: prEntryGrid
@@ -3174,15 +1973,15 @@ ApplicationWindow {
                     RowLayout {
                         Layout.fillWidth: true; spacing: 8
                         Label {
-                            text: editingPRNumber === "" ? excelHandler.getNextPRNumber() : editingPRNumber
-                            color: "#e67e22"; font.bold: true
+                            text: editingPRNumber === "" ? Backend.getNextPRNumber() : editingPRNumber
+                            color: Theme.warning; font.bold: true
                         }
                         Button {
                             text: "Cancel edit"
                             visible: editingPRNumber !== ""
                             flat: true
                             onClicked: clearPrForm()
-                            contentItem: Text { text: "Cancel edit"; color: "#e74c3c"; font.pixelSize: 11 }
+                            contentItem: Text { text: "Cancel edit"; color: Theme.danger; font.pixelSize: 11 }
                         }
                         Item { Layout.fillWidth: true }
                     }
@@ -3230,7 +2029,7 @@ ApplicationWindow {
                     TextField {
                         id: prRequestedByField
                         Layout.fillWidth: true
-                        text: excelHandler.currentUser
+                        text: Backend.currentUser
                         placeholderText: "Who is asking"
                         selectByMouse: true
                     }
@@ -3263,7 +2062,7 @@ ApplicationWindow {
             Rectangle {
                 Layout.fillWidth: true
                 Layout.preferredHeight: prLineGrid.implicitHeight + 2 * prLineGrid.anchors.margins
-                color: "#fffaf4"; border.color: "#e67e22"; radius: 5
+                color: "#fffaf4"; border.color: Theme.warning; radius: 5
 
                 GridLayout {
                     id: prLineGrid
@@ -3327,7 +2126,7 @@ ApplicationWindow {
                             Layout.fillWidth: true
                             Layout.minimumWidth: 160
                             editable: true
-                            model: excelHandler.getVendorNames()
+                            model: Backend.getVendorNames()
                         }
                         Button {
                             text: "\u{1F50D}"
@@ -3344,7 +2143,7 @@ ApplicationWindow {
                     }
                     RowLayout {
                         Layout.fillWidth: true; spacing: 6
-                        Label { text: "₹"; font.bold: true; color: "#2c3e50" }
+                        Label { text: "₹"; font.bold: true; color: Theme.textPrimary }
                         TextField {
                             id: prEstPriceField
                             Layout.fillWidth: true
@@ -3374,7 +2173,7 @@ ApplicationWindow {
                 Layout.preferredHeight: prCartModel.count === 0
                                         ? 58
                                         : Math.min(170, 44 + prCartModel.count * 38)
-                border.color: "#e67e22"; radius: 5; color: "#ffffff"
+                border.color: Theme.warning; radius: 5; color: "#ffffff"
 
                 ColumnLayout {
                     anchors.fill: parent; anchors.margins: 8; spacing: 6
@@ -3384,11 +2183,11 @@ ApplicationWindow {
                         Layout.leftMargin: 6; Layout.rightMargin: 6
                         spacing: 10
                         visible: prCartModel.count > 0
-                        Label { text: "Item"; font.bold: true; font.pixelSize: 11; color: "#7f8c8d"; Layout.fillWidth: true }
-                        Label { text: "Preferred Vendor"; font.bold: true; font.pixelSize: 11; color: "#7f8c8d"; Layout.preferredWidth: 170 }
-                        Label { text: "Qty"; font.bold: true; font.pixelSize: 11; color: "#7f8c8d"; Layout.preferredWidth: 70; horizontalAlignment: Text.AlignRight }
-                        Label { text: "Unit"; font.bold: true; font.pixelSize: 11; color: "#7f8c8d"; Layout.preferredWidth: 70 }
-                        Label { text: "Est. Amount"; font.bold: true; font.pixelSize: 11; color: "#7f8c8d"; Layout.preferredWidth: 160; horizontalAlignment: Text.AlignRight }
+                        Label { text: "Item"; font.bold: true; font.pixelSize: 11; color: Theme.textSecondary; Layout.fillWidth: true }
+                        Label { text: "Preferred Vendor"; font.bold: true; font.pixelSize: 11; color: Theme.textSecondary; Layout.preferredWidth: 170 }
+                        Label { text: "Qty"; font.bold: true; font.pixelSize: 11; color: Theme.textSecondary; Layout.preferredWidth: 70; horizontalAlignment: Text.AlignRight }
+                        Label { text: "Unit"; font.bold: true; font.pixelSize: 11; color: Theme.textSecondary; Layout.preferredWidth: 70 }
+                        Label { text: "Est. Amount"; font.bold: true; font.pixelSize: 11; color: Theme.textSecondary; Layout.preferredWidth: 160; horizontalAlignment: Text.AlignRight }
                         Item { Layout.preferredWidth: 30 }
                     }
 
@@ -3399,7 +2198,7 @@ ApplicationWindow {
                         model: prCartModel
                         delegate: Rectangle {
                             width: prCartView.width; height: 32
-                            color: "#fff"; border.color: "#e0e0e0"; radius: 3
+                            color: "#fff"; border.color: Theme.borderSubtle; radius: 3
                             RowLayout {
                                 anchors.fill: parent
                                 anchors.leftMargin: 6; anchors.rightMargin: 6
@@ -3413,14 +2212,14 @@ ApplicationWindow {
                                 }
                                 Label {
                                     text: model.vendor !== "" ? model.vendor : "-"
-                                    font.pixelSize: 11; color: "#7f8c8d"
+                                    font.pixelSize: 11; color: Theme.textSecondary
                                     Layout.preferredWidth: 170; elide: Text.ElideRight
                                 }
-                                Label { text: model.qty; font.pixelSize: 11; color: "#2c3e50"; Layout.preferredWidth: 70; horizontalAlignment: Text.AlignRight }
-                                Label { text: model.unit; font.pixelSize: 11; color: "#7f8c8d"; Layout.preferredWidth: 70; elide: Text.ElideRight }
+                                Label { text: model.qty; font.pixelSize: 11; color: Theme.textPrimary; Layout.preferredWidth: 70; horizontalAlignment: Text.AlignRight }
+                                Label { text: model.unit; font.pixelSize: 11; color: Theme.textSecondary; Layout.preferredWidth: 70; elide: Text.ElideRight }
                                 Label {
-                                    text: formatRupees(model.qty * model.estimatedPrice)
-                                    font.pixelSize: 12; font.bold: true; color: "#e67e22"
+                                    text: Format.rupees(model.qty * model.estimatedPrice)
+                                    font.pixelSize: 12; font.bold: true; color: Theme.warning
                                     Layout.preferredWidth: 160; horizontalAlignment: Text.AlignRight
                                 }
                                 Button {
@@ -3428,7 +2227,7 @@ ApplicationWindow {
                                     ToolTip.visible: hovered
                                     ToolTip.text: "Remove this line"
                                     onClicked: prCartModel.remove(index)
-                                    contentItem: Text { text: "X"; color: "#e74c3c"; font.pixelSize: 11; font.bold: true; horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter }
+                                    contentItem: Text { text: "X"; color: Theme.danger; font.pixelSize: 11; font.bold: true; horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter }
                                 }
                             }
                         }
@@ -3438,7 +2237,7 @@ ApplicationWindow {
                 Label {
                     anchors.centerIn: parent
                     text: "Nothing requested yet - use \"+ Add Item\" above"
-                    visible: prCartModel.count === 0; color: "#95a5a6"; font.pixelSize: 11
+                    visible: prCartModel.count === 0; color: Theme.textMuted; font.pixelSize: 11
                 }
             }
 
@@ -3449,13 +2248,13 @@ ApplicationWindow {
                 Rectangle {
                     Layout.preferredWidth: 280
                     Layout.preferredHeight: 38
-                    color: "#fdf0e2"; border.color: "#e67e22"; radius: 4
+                    color: "#fdf0e2"; border.color: Theme.warning; radius: 4
                     RowLayout {
                         anchors.fill: parent; anchors.leftMargin: 10; anchors.rightMargin: 10
-                        Label { text: "Estimated"; font.bold: true; color: "#2c3e50"; font.pixelSize: 12 }
+                        Label { text: "Estimated"; font.bold: true; color: Theme.textPrimary; font.pixelSize: 12 }
                         Label {
-                            text: formatRupees(prCartValue())
-                            font.bold: true; font.pixelSize: 15; color: "#e67e22"
+                            text: Format.rupees(prCartValue())
+                            font.bold: true; font.pixelSize: 15; color: Theme.warning
                             Layout.fillWidth: true
                             horizontalAlignment: Text.AlignRight
                         }
@@ -3511,11 +2310,11 @@ ApplicationWindow {
                     text: prSearchField.text.trim() === ""
                           ? prListModel.count + (prListModel.count === 1 ? " request" : " requests")
                           : prListModel.count + " of " + prRowsCache.length + " match"
-                    color: "#7f8c8d"; font.pixelSize: 11
+                    color: Theme.textSecondary; font.pixelSize: 11
                 }
                 Label {
-                    text: "Pending: " + excelHandler.pendingRequestCount
-                    font.bold: true; color: "#e67e22"
+                    text: "Pending: " + Backend.pendingRequestCount
+                    font.bold: true; color: Theme.warning
                 }
             }
 
@@ -3523,7 +2322,7 @@ ApplicationWindow {
             Rectangle {
                 Layout.fillWidth: true; Layout.fillHeight: true
                 Layout.minimumHeight: 90
-                border.color: "#dee2e6"; radius: 5
+                border.color: Theme.border; radius: 5
 
                 ListView {
                     id: prListView; anchors.fill: parent; anchors.margins: 5; clip: true; spacing: 4
@@ -3532,11 +2331,11 @@ ApplicationWindow {
                         width: prListView.width - 10; height: 74
                         color: {
                             if (model.status === "Approved") return "#eaf6ff"
-                            if (model.status === "Ordered") return "#e8f8e8"
+                            if (model.status === "Ordered") return Theme.successWash
                             if (model.status === "Rejected") return "#f7eaea"
-                            return "#fff8e8"
+                            return Theme.warningWash
                         }
-                        border.color: "#e0e0e0"; radius: 4
+                        border.color: Theme.borderSubtle; radius: 4
 
                         RowLayout {
                             anchors.fill: parent; anchors.margins: 10; spacing: 12
@@ -3545,32 +2344,32 @@ ApplicationWindow {
                                 Layout.fillWidth: true; Layout.minimumWidth: 200; spacing: 3
                                 RowLayout {
                                     spacing: 8
-                                    Label { text: model.prNo; font.bold: true; font.pixelSize: 13; color: "#2c3e50" }
+                                    Label { text: model.prNo; font.bold: true; font.pixelSize: 13; color: Theme.textPrimary }
                                     Label {
                                         text: model.status
                                         font.pixelSize: 11; font.bold: true
                                         color: {
                                             if (model.status === "Approved") return "#2a78d6"
-                                            if (model.status === "Ordered") return "#27ae60"
-                                            if (model.status === "Rejected") return "#e74c3c"
-                                            return "#f39c12"
+                                            if (model.status === "Ordered") return Theme.success
+                                            if (model.status === "Rejected") return Theme.danger
+                                            return Theme.pending
                                         }
                                     }
                                     Label {
                                         text: "URGENT"
                                         visible: model.priority === "Urgent"
-                                        font.pixelSize: 10; font.bold: true; color: "#e74c3c"
+                                        font.pixelSize: 10; font.bold: true; color: Theme.danger
                                     }
                                     Label {
                                         text: "→ " + model.poNo
                                         visible: (model.poNo || "") !== ""
-                                        font.pixelSize: 11; color: "#27ae60"; font.bold: true
+                                        font.pixelSize: 11; color: Theme.success; font.bold: true
                                     }
                                 }
                                 Label {
                                     text: model.summary + "  |  Qty: " + model.totalQty +
-                                          "  |  Est: " + formatRupees(model.estimatedValue)
-                                    font.pixelSize: 11; color: "#7f8c8d"
+                                          "  |  Est: " + Format.rupees(model.estimatedValue)
+                                    font.pixelSize: 11; color: Theme.textSecondary
                                     Layout.fillWidth: true; elide: Text.ElideRight
                                 }
                                 Label {
@@ -3579,7 +2378,7 @@ ApplicationWindow {
                                           "  |  Raised: " + model.date +
                                           (model.neededBy !== "" ? "  |  Needed by: " + model.neededBy : "") +
                                           ((model.reviewedBy || "") !== "" ? "  |  Reviewed by: " + model.reviewedBy : "")
-                                    font.pixelSize: 10; color: "#95a5a6"
+                                    font.pixelSize: 10; color: Theme.textMuted
                                     Layout.fillWidth: true; elide: Text.ElideRight
                                 }
                             }
@@ -3587,11 +2386,11 @@ ApplicationWindow {
                             Button {
                                 text: "View"
                                 onClicked: {
-                                    selectedPRDetails = excelHandler.getPRByNumber(model.prNo)
-                                    selectedPRItems = excelHandler.getPRItems(model.prNo)
+                                    selectedPRDetails = Backend.getPRByNumber(model.prNo)
+                                    selectedPRItems = Backend.getPRItems(model.prNo)
                                     prDetailsDialog.open()
                                 }
-                                contentItem: Text { text: "View"; color: "#2c3e50"; font.pixelSize: 11 }
+                                contentItem: Text { text: "View"; color: Theme.textPrimary; font.pixelSize: 11 }
                             }
                             Button {
                                 text: "Approve"
@@ -3603,7 +2402,7 @@ ApplicationWindow {
                                     prReviewNoteField.text = ""
                                     prReviewDialog.open()
                                 }
-                                contentItem: Text { text: "Approve"; color: parent.enabled ? "#27ae60" : "#95a5a6"; font.pixelSize: 11; font.bold: true }
+                                contentItem: Text { text: "Approve"; color: parent.enabled ? Theme.success : "#95a5a6"; font.pixelSize: 11; font.bold: true }
                             }
                             Button {
                                 text: "Reject"
@@ -3615,7 +2414,7 @@ ApplicationWindow {
                                     prReviewNoteField.text = ""
                                     prReviewDialog.open()
                                 }
-                                contentItem: Text { text: "Reject"; color: parent.enabled ? "#e74c3c" : "#95a5a6"; font.pixelSize: 11 }
+                                contentItem: Text { text: "Reject"; color: parent.enabled ? Theme.danger : "#95a5a6"; font.pixelSize: 11 }
                             }
                             Button {
                                 text: "Create PO"
@@ -3624,7 +2423,7 @@ ApplicationWindow {
                                 ToolTip.visible: hovered
                                 ToolTip.text: "Open the purchase order form with these items"
                                 onClicked: raisePOForRequest(model.prNo)
-                                contentItem: Text { text: "Create PO"; color: parent.enabled ? "#3498db" : "#95a5a6"; font.pixelSize: 11; font.bold: true }
+                                contentItem: Text { text: "Create PO"; color: parent.enabled ? Theme.info : "#95a5a6"; font.pixelSize: 11; font.bold: true }
                             }
                             Button {
                                 text: "Edit"
@@ -3638,7 +2437,7 @@ ApplicationWindow {
                                 visible: (model.poNo || "") === ""
                                 enabled: loginDialog.isAuthenticated
                                 onClicked: { prPendingDelete = model.prNo; prDeleteConfirmDialog.open() }
-                                contentItem: Text { text: "Delete"; color: parent.enabled ? "#e74c3c" : "#95a5a6"; font.pixelSize: 11 }
+                                contentItem: Text { text: "Delete"; color: parent.enabled ? Theme.danger : "#95a5a6"; font.pixelSize: 11 }
                             }
                         }
                     }
@@ -3652,7 +2451,7 @@ ApplicationWindow {
                     text: prSearchField.text.trim() === ""
                           ? "No purchase requests yet"
                           : "No requests match \"" + prSearchField.text.trim() + "\""
-                    visible: prListModel.count === 0; color: "#95a5a6"
+                    visible: prListModel.count === 0; color: Theme.textMuted
                 }
             }
 
@@ -3698,8 +2497,8 @@ ApplicationWindow {
         }
 
         onAccepted: {
-            if (excelHandler.setPurchaseRequestStatus(prPendingReview, prReviewAction,
-                                                      excelHandler.currentUser,
+            if (Backend.setPurchaseRequestStatus(prPendingReview, prReviewAction,
+                                                      Backend.currentUser,
                                                       prReviewNoteField.text)) {
                 statusLabel.text = prPendingReview + " " + prReviewAction.toLowerCase()
                 statusTimer.restart()
@@ -3724,7 +2523,7 @@ ApplicationWindow {
         }
 
         onAccepted: {
-            if (excelHandler.deletePurchaseRequest(prPendingDelete)) {
+            if (Backend.deletePurchaseRequest(prPendingDelete)) {
                 if (editingPRNumber === prPendingDelete) clearPrForm()
                 statusLabel.text = "Deleted " + prPendingDelete
                 statusTimer.restart()
@@ -3741,7 +2540,7 @@ ApplicationWindow {
     function refreshPrPartPicker(filter) {
         prPartPickerModel.clear()
         var f = (filter || "").toString().trim().toLowerCase()
-        var items = excelHandler.getItemMasterList()
+        var items = Backend.getItemMasterList()
         for (var i = 0; i < items.length; i++) {
             var it = items[i]
             var partName = (it.partName || "").toString()
@@ -3772,7 +2571,7 @@ ApplicationWindow {
         else prItemNameField.editText = item.partName
         prPartNoField.text = item.partNo
         prUnitField.text = item.unit
-        prEstPriceField.text = formatAmount(item.unitPrice)
+        prEstPriceField.text = Format.fixed(item.unitPrice)
         if (item.vendor !== "") prVendorField.editText = item.vendor
         prPartPickerDialog.close()
     }
@@ -3799,7 +2598,7 @@ ApplicationWindow {
 
             Rectangle {
                 Layout.fillWidth: true; Layout.fillHeight: true
-                border.color: "#dee2e6"; radius: 4
+                border.color: Theme.border; radius: 4
 
                 ListView {
                     id: prPartPickerView
@@ -3807,7 +2606,7 @@ ApplicationWindow {
                     model: prPartPickerModel
                     delegate: Rectangle {
                         width: prPartPickerView.width - 10; height: 46
-                        color: "#fff"; border.color: "#e0e0e0"; radius: 3
+                        color: "#fff"; border.color: Theme.borderSubtle; radius: 3
                         MouseArea {
                             anchors.fill: parent
                             cursorShape: Qt.PointingHandCursor
@@ -3819,13 +2618,13 @@ ApplicationWindow {
                         }
                         ColumnLayout {
                             anchors.fill: parent; anchors.margins: 6; spacing: 2
-                            Label { text: model.partName; font.bold: true; font.pixelSize: 12; color: "#2c3e50" }
+                            Label { text: model.partName; font.bold: true; font.pixelSize: 12; color: Theme.textPrimary }
                             Label {
                                 text: (model.partNo !== "" ? "Part No: " + model.partNo : "No part number") +
                                       (model.department !== "" ? "  |  " + model.department : "") +
                                       (model.vendor !== "" ? "  |  " + model.vendor : "") +
-                                      "  |  " + formatRupees(model.unitPrice)
-                                font.pixelSize: 10; color: "#7f8c8d"
+                                      "  |  " + Format.rupees(model.unitPrice)
+                                font.pixelSize: 10; color: Theme.textSecondary
                             }
                         }
                     }
@@ -3834,7 +2633,7 @@ ApplicationWindow {
                 Label {
                     anchors.centerIn: parent
                     text: "No matching items"
-                    visible: prPartPickerModel.count === 0; color: "#95a5a6"
+                    visible: prPartPickerModel.count === 0; color: Theme.textMuted
                 }
             }
         }
@@ -3842,80 +2641,10 @@ ApplicationWindow {
 
     /* ---- Request details ---- */
 
-    Dialog {
+    PrDetailsDialog {
         id: prDetailsDialog
-        title: "Purchase Request " + (selectedPRDetails.prNo || "")
-        modal: true
-        anchors.centerIn: parent
-        standardButtons: Dialog.Close
-        width: Math.min(root.width - 120, 720)
-
-        ColumnLayout {
-            anchors.fill: parent; spacing: 8
-
-            GridLayout {
-                Layout.fillWidth: true
-                columns: 4; rowSpacing: 4; columnSpacing: 10
-
-                Label { text: "Request No:"; font.bold: true }
-                Label { text: selectedPRDetails.prNo || "-"; Layout.fillWidth: true }
-                Label { text: "Status:"; font.bold: true }
-                Label { text: selectedPRDetails.status || "-"; Layout.fillWidth: true }
-
-                Label { text: "Requested by:"; font.bold: true }
-                Label { text: selectedPRDetails.requestedBy || "-"; Layout.fillWidth: true }
-                Label { text: "Department:"; font.bold: true }
-                Label { text: selectedPRDetails.department || "-"; Layout.fillWidth: true }
-
-                Label { text: "Raised:"; font.bold: true }
-                Label { text: selectedPRDetails.date || "-"; Layout.fillWidth: true }
-                Label { text: "Needed by:"; font.bold: true }
-                Label { text: selectedPRDetails.neededBy || "-"; Layout.fillWidth: true }
-
-                Label { text: "Priority:"; font.bold: true }
-                Label { text: selectedPRDetails.priority || "Normal"; Layout.fillWidth: true }
-                Label { text: "Ordered as:"; font.bold: true }
-                Label { text: selectedPRDetails.poNo || "-"; Layout.fillWidth: true }
-
-                Label { text: "Reason:"; font.bold: true; Layout.alignment: Qt.AlignTop }
-                Label { text: selectedPRDetails.remarks || "-"; Layout.fillWidth: true; wrapMode: Text.WordWrap }
-                Label { text: "Reviewed by:"; font.bold: true; Layout.alignment: Qt.AlignTop }
-                Label {
-                    text: (selectedPRDetails.reviewedBy || "-") +
-                          ((selectedPRDetails.reviewNote || "") !== ""
-                           ? "\n“" + selectedPRDetails.reviewNote + "”" : "")
-                    Layout.fillWidth: true; wrapMode: Text.WordWrap
-                }
-            }
-
-            Rectangle { Layout.fillWidth: true; height: 1; color: "#e0e0e0" }
-
-            Label {
-                text: "Items requested (" + selectedPRItems.length + ")"
-                font.bold: true; color: "#2c3e50"
-            }
-
-            Rectangle {
-                Layout.fillWidth: true
-                Layout.preferredHeight: Math.min(220, 8 + selectedPRItems.length * 26)
-                border.color: "#dee2e6"; radius: 4
-
-                ListView {
-                    id: prDetailItemsView
-                    anchors.fill: parent; anchors.margins: 4; clip: true
-                    model: selectedPRItems
-                    delegate: RowLayout {
-                        width: prDetailItemsView.width - 8
-                        height: 26
-                        spacing: 10
-                        Label { text: (index + 1) + ". " + modelData.itemName; font.pixelSize: 11; Layout.fillWidth: true; elide: Text.ElideRight }
-                        Label { text: modelData.vendor; font.pixelSize: 11; color: "#7f8c8d"; Layout.preferredWidth: 150; elide: Text.ElideRight }
-                        Label { text: modelData.qty + " " + modelData.unit; font.pixelSize: 11; font.bold: true; Layout.preferredWidth: 90; horizontalAlignment: Text.AlignRight }
-                        Label { text: formatRupees(modelData.qty * modelData.estimatedPrice); font.pixelSize: 11; color: "#e67e22"; Layout.preferredWidth: 140; horizontalAlignment: Text.AlignRight }
-                    }
-                }
-            }
-        }
+        request: root.selectedPRDetails
+        lineItems: root.selectedPRItems
     }
 
     /* ================= STOCK ROW EDITOR ================= */
@@ -3927,15 +2656,15 @@ ApplicationWindow {
     function openStockRowEditor(row) {
         if (row <= 0 || !loginDialog.isAuthenticated) return
         editingStockRow = row
-        stockEditPartName.text = (excelHandler.model.getData(row, 0) || "").toString()
-        stockEditPartNo.text = (excelHandler.model.getData(row, 1) || "").toString()
-        stockEditStock.text = (excelHandler.model.getData(row, 2) || "").toString()
-        stockEditDepartment.text = (excelHandler.model.getData(row, 3) || "").toString()
-        stockEditPrepared.text = (excelHandler.model.getData(row, 4) || "").toString()
-        stockEditApproved.text = (excelHandler.model.getData(row, 5) || "").toString()
-        stockEditVendor.text = (excelHandler.model.getData(row, 6) || "").toString()
-        stockEditDate.text = (excelHandler.model.getData(row, 7) || "").toString()
-        stockEditUnitPrice.text = (excelHandler.model.getData(row, 8) || "").toString()
+        stockEditPartName.text = (Backend.model.getData(row, 0) || "").toString()
+        stockEditPartNo.text = (Backend.model.getData(row, 1) || "").toString()
+        stockEditStock.text = (Backend.model.getData(row, 2) || "").toString()
+        stockEditDepartment.text = (Backend.model.getData(row, 3) || "").toString()
+        stockEditPrepared.text = (Backend.model.getData(row, 4) || "").toString()
+        stockEditApproved.text = (Backend.model.getData(row, 5) || "").toString()
+        stockEditVendor.text = (Backend.model.getData(row, 6) || "").toString()
+        stockEditDate.text = (Backend.model.getData(row, 7) || "").toString()
+        stockEditUnitPrice.text = (Backend.model.getData(row, 8) || "").toString()
         stockRowEditDialog.open()
     }
 
@@ -3949,7 +2678,7 @@ ApplicationWindow {
 
         onAccepted: {
             if (editingStockRow <= 0) return
-            var m = excelHandler.model
+            var m = Backend.model
             m.setDataAt(editingStockRow, 0, stockEditPartName.text)
             m.setDataAt(editingStockRow, 1, stockEditPartNo.text)
             m.setDataAt(editingStockRow, 2, stockEditStock.text)
@@ -4052,13 +2781,6 @@ ApplicationWindow {
     property string dcPreviewPdfPath: ""
     property string dcLastSavedPdf: ""
 
-    // Quantities may be weighed or metered, so a fractional amount keeps its
-    // decimals while a plain count does not grow ".00".
-    function formatQty(value) {
-        var n = parseAmount(value)
-        return (Math.abs(n - Math.round(n)) < 0.005) ? Math.round(n).toString() : n.toFixed(2)
-    }
-
     function dcCartQty() {
         var t = 0
         for (var i = 0; i < dcCartModel.count; i++) t += dcCartModel.get(i).qty
@@ -4091,7 +2813,7 @@ ApplicationWindow {
         if (itemName === "") {
             statusLabel.text = "Enter an item name first"; statusTimer.restart(); return
         }
-        var qty = parseAmount(dcQtyField.text)
+        var qty = Format.amount(dcQtyField.text)
         if (qty <= 0) {
             statusLabel.text = "Quantity must be greater than 0 for " + itemName
             statusTimer.restart(); return
@@ -4124,14 +2846,14 @@ ApplicationWindow {
         dcShipEmailField.text = ""
         dcShipGstinField.text = ""
         dcTermsField.text = ""
-        dcDeliveredByField.text = excelHandler.currentUser
+        dcDeliveredByField.text = Backend.currentUser
         dcReceivedByField.text = ""
     }
 
     // Pulls a draft challan back into the entry form so it can be corrected
     // without burning a challan number.
     function loadDcForEdit(dcNo) {
-        var dc = excelHandler.getDCByNumber(dcNo)
+        var dc = Backend.getDCByNumber(dcNo)
         if (!dc || dc.dcNo === undefined) return
 
         clearDcForm()
@@ -4160,7 +2882,7 @@ ApplicationWindow {
             dcShipGstinField.text = dc.shipGstin || ""
         }
 
-        var lines = excelHandler.getDCItems(dcNo)
+        var lines = Backend.getDCItems(dcNo)
         for (var i = 0; i < lines.length; i++) {
             dcCartModel.append({
                 itemName: lines[i].itemName || "",
@@ -4189,7 +2911,7 @@ ApplicationWindow {
             terms: dcTermsField.text,
             deliveredBy: dcDeliveredByField.text,
             receivedBy: dcReceivedByField.text,
-            preparedBy: excelHandler.currentUser
+            preparedBy: Backend.currentUser
         }
     }
 
@@ -4209,14 +2931,14 @@ ApplicationWindow {
         var items = dcCartItems()
         if (editingDCNumber !== "") {
             var dcNo = editingDCNumber
-            if (!excelHandler.updateDeliveryChallan(dcNo, dcFormPayload(), items)) return
+            if (!Backend.updateDeliveryChallan(dcNo, dcFormPayload(), items)) return
             clearDcForm()
             refreshDCList()
             openDcPdfPreview(dcNo)
             return
         }
 
-        var created = excelHandler.createDeliveryChallan(dcFormPayload(), items)
+        var created = Backend.createDeliveryChallan(dcFormPayload(), items)
         if (created === "") return
         clearDcForm()
         refreshDCList()
@@ -4225,8 +2947,8 @@ ApplicationWindow {
 
     function refreshDCList() {
         var filter = dcFilterCombo.currentText === "All" ? "" : dcFilterCombo.currentText
-        dcRowsCache = excelHandler.getDCList(filter)
-        dcSearchIndex = excelHandler.getDCSearchIndex()
+        dcRowsCache = Backend.getDCList(filter)
+        dcSearchIndex = Backend.getDCSearchIndex()
         applyDcSearch()
     }
 
@@ -4253,7 +2975,7 @@ ApplicationWindow {
         var f = (filter || "").toString().trim().toLowerCase()
         var seen = ({})
 
-        var parties = excelHandler.getDCPartyList()
+        var parties = Backend.getDCPartyList()
         for (var i = 0; i < parties.length; i++) {
             var p = parties[i]
             var name = (p.partyName || "").toString()
@@ -4268,7 +2990,7 @@ ApplicationWindow {
             })
         }
 
-        var vendors = excelHandler.getVendorList()
+        var vendors = Backend.getVendorList()
         for (var v = 0; v < vendors.length; v++) {
             var vn = (vendors[v].vendorName || "").toString()
             if (vn.trim() === "" || seen[vn.toLowerCase()]) continue
@@ -4310,7 +3032,7 @@ ApplicationWindow {
     }
 
     function refreshDcPdfPreview() {
-        var result = excelHandler.generateDCPreview(dcPreviewDcNo)
+        var result = Backend.generateDCPreview(dcPreviewDcNo)
         if (!result || !result.pages || result.pages.length === 0) {
             dcPreviewPages = []
             dcPreviewPdfPath = ""
@@ -4323,7 +3045,7 @@ ApplicationWindow {
     }
 
     function sendDcPdf() {
-        var saved = excelHandler.saveDCPdf(dcPreviewDcNo, "")
+        var saved = Backend.saveDCPdf(dcPreviewDcNo, "")
         if (saved === "") return
         dcLastSavedPdf = saved
         statusLabel.text = "Delivery challan saved to " + saved
@@ -4345,11 +3067,11 @@ ApplicationWindow {
 
             RowLayout {
                 Layout.fillWidth: true
-                Label { text: "Delivery Challans"; font.bold: true; font.pixelSize: 16; color: "#2c3e50" }
+                Label { text: "Delivery Challans"; font.bold: true; font.pixelSize: 16; color: Theme.textPrimary }
                 Item { Layout.fillWidth: true }
                 Label {
                     text: "A challan records what left the premises. It does not change stock levels — use Issue Stock for that."
-                    font.pixelSize: 10; color: "#95a5a6"
+                    font.pixelSize: 10; color: Theme.textMuted
                 }
             }
 
@@ -4374,7 +3096,7 @@ ApplicationWindow {
                     RowLayout {
                         Layout.fillWidth: true; spacing: 8
                         Label {
-                            text: editingDCNumber === "" ? excelHandler.getNextDCNumber() : editingDCNumber
+                            text: editingDCNumber === "" ? Backend.getNextDCNumber() : editingDCNumber
                             color: "#1b9dd9"; font.bold: true
                         }
                         Button {
@@ -4382,7 +3104,7 @@ ApplicationWindow {
                             visible: editingDCNumber !== ""
                             flat: true
                             onClicked: clearDcForm()
-                            contentItem: Text { text: "Cancel edit"; color: "#e74c3c"; font.pixelSize: 11 }
+                            contentItem: Text { text: "Cancel edit"; color: Theme.danger; font.pixelSize: 11 }
                         }
                         Item { Layout.fillWidth: true }
                     }
@@ -4455,7 +3177,7 @@ ApplicationWindow {
                         placeholderText: "Street, city - PIN (one line per printed line)"
                         wrapMode: TextArea.Wrap
                         selectByMouse: true
-                        background: Rectangle { color: "#ffffff"; border.color: "#bdc3c7"; radius: 3 }
+                        background: Rectangle { color: "#ffffff"; border.color: Theme.divider; radius: 3 }
                     }
                     Label {
                         text: "Phone / Email:"; horizontalAlignment: Text.AlignRight
@@ -4506,7 +3228,7 @@ ApplicationWindow {
                         placeholderText: "Where the goods are actually going"
                         wrapMode: TextArea.Wrap
                         selectByMouse: true
-                        background: Rectangle { color: "#ffffff"; border.color: "#bdc3c7"; radius: 3 }
+                        background: Rectangle { color: "#ffffff"; border.color: Theme.divider; radius: 3 }
                     }
                     Label {
                         text: "Phone / Email:"; visible: dcSeparateShipping.checked
@@ -4623,11 +3345,11 @@ ApplicationWindow {
                         Layout.leftMargin: 6; Layout.rightMargin: 6
                         spacing: 10
                         visible: dcCartModel.count > 0
-                        Label { text: "Item"; font.bold: true; font.pixelSize: 11; color: "#7f8c8d"; Layout.fillWidth: true }
-                        Label { text: "Part No"; font.bold: true; font.pixelSize: 11; color: "#7f8c8d"; Layout.preferredWidth: 160 }
-                        Label { text: "HSN/SAC"; font.bold: true; font.pixelSize: 11; color: "#7f8c8d"; Layout.preferredWidth: 130 }
-                        Label { text: "Qty"; font.bold: true; font.pixelSize: 11; color: "#7f8c8d"; Layout.preferredWidth: 80; horizontalAlignment: Text.AlignRight }
-                        Label { text: "Unit"; font.bold: true; font.pixelSize: 11; color: "#7f8c8d"; Layout.preferredWidth: 90 }
+                        Label { text: "Item"; font.bold: true; font.pixelSize: 11; color: Theme.textSecondary; Layout.fillWidth: true }
+                        Label { text: "Part No"; font.bold: true; font.pixelSize: 11; color: Theme.textSecondary; Layout.preferredWidth: 160 }
+                        Label { text: "HSN/SAC"; font.bold: true; font.pixelSize: 11; color: Theme.textSecondary; Layout.preferredWidth: 130 }
+                        Label { text: "Qty"; font.bold: true; font.pixelSize: 11; color: Theme.textSecondary; Layout.preferredWidth: 80; horizontalAlignment: Text.AlignRight }
+                        Label { text: "Unit"; font.bold: true; font.pixelSize: 11; color: Theme.textSecondary; Layout.preferredWidth: 90 }
                         Item { Layout.preferredWidth: 30 }
                     }
 
@@ -4638,7 +3360,7 @@ ApplicationWindow {
                         model: dcCartModel
                         delegate: Rectangle {
                             width: dcCartView.width; height: 32
-                            color: "#fff"; border.color: "#e0e0e0"; radius: 3
+                            color: "#fff"; border.color: Theme.borderSubtle; radius: 3
                             RowLayout {
                                 anchors.fill: parent
                                 anchors.leftMargin: 6; anchors.rightMargin: 6
@@ -4650,16 +3372,16 @@ ApplicationWindow {
                                     Layout.fillWidth: true; Layout.minimumWidth: 120
                                     elide: Text.ElideRight
                                 }
-                                Label { text: model.partNo; font.pixelSize: 11; color: "#7f8c8d"; Layout.preferredWidth: 160; elide: Text.ElideRight }
-                                Label { text: model.hsnCode; font.pixelSize: 11; color: "#7f8c8d"; Layout.preferredWidth: 130; elide: Text.ElideRight }
-                                Label { text: formatQty(model.qty); font.pixelSize: 12; font.bold: true; color: "#1b9dd9"; Layout.preferredWidth: 80; horizontalAlignment: Text.AlignRight }
-                                Label { text: model.unit; font.pixelSize: 11; color: "#2c3e50"; Layout.preferredWidth: 90; elide: Text.ElideRight }
+                                Label { text: model.partNo; font.pixelSize: 11; color: Theme.textSecondary; Layout.preferredWidth: 160; elide: Text.ElideRight }
+                                Label { text: model.hsnCode; font.pixelSize: 11; color: Theme.textSecondary; Layout.preferredWidth: 130; elide: Text.ElideRight }
+                                Label { text: Format.qty(model.qty); font.pixelSize: 12; font.bold: true; color: "#1b9dd9"; Layout.preferredWidth: 80; horizontalAlignment: Text.AlignRight }
+                                Label { text: model.unit; font.pixelSize: 11; color: Theme.textPrimary; Layout.preferredWidth: 90; elide: Text.ElideRight }
                                 Button {
                                     Layout.preferredWidth: 30; Layout.preferredHeight: 24
                                     ToolTip.visible: hovered
                                     ToolTip.text: "Remove this line"
                                     onClicked: dcCartModel.remove(index)
-                                    contentItem: Text { text: "X"; color: "#e74c3c"; font.pixelSize: 11; font.bold: true; horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter }
+                                    contentItem: Text { text: "X"; color: Theme.danger; font.pixelSize: 11; font.bold: true; horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter }
                                 }
                             }
                         }
@@ -4669,7 +3391,7 @@ ApplicationWindow {
                 Label {
                     anchors.centerIn: parent
                     text: "No items added - use \"+ Add Item\" above"
-                    visible: dcCartModel.count === 0; color: "#95a5a6"; font.pixelSize: 11
+                    visible: dcCartModel.count === 0; color: Theme.textMuted; font.pixelSize: 11
                 }
             }
 
@@ -4685,7 +3407,7 @@ ApplicationWindow {
                     placeholderText: "Printed at the foot of the challan"
                     wrapMode: TextArea.Wrap
                     selectByMouse: true
-                    background: Rectangle { color: "#ffffff"; border.color: "#bdc3c7"; radius: 3 }
+                    background: Rectangle { color: "#ffffff"; border.color: Theme.divider; radius: 3 }
                 }
 
                 ColumnLayout {
@@ -4693,7 +3415,7 @@ ApplicationWindow {
                     RowLayout {
                         Layout.fillWidth: true; spacing: 6
                         Label { text: "Delivered By:"; Layout.preferredWidth: 84 }
-                        TextField { id: dcDeliveredByField; Layout.fillWidth: true; text: excelHandler.currentUser; selectByMouse: true }
+                        TextField { id: dcDeliveredByField; Layout.fillWidth: true; text: Backend.currentUser; selectByMouse: true }
                     }
                     RowLayout {
                         Layout.fillWidth: true; spacing: 6
@@ -4705,7 +3427,7 @@ ApplicationWindow {
                 ColumnLayout {
                     Layout.preferredWidth: 210; spacing: 4
                     Label {
-                        text: "Total quantity: " + formatQty(dcCartQty())
+                        text: "Total quantity: " + Format.qty(dcCartQty())
                         font.bold: true; font.pixelSize: 13; color: "#1b9dd9"
                         Layout.alignment: Qt.AlignRight
                     }
@@ -4758,7 +3480,7 @@ ApplicationWindow {
                     text: dcSearchField.text.trim() === ""
                           ? dcListModel.count + (dcListModel.count === 1 ? " challan" : " challans")
                           : dcListModel.count + " of " + dcRowsCache.length + " match"
-                    color: "#7f8c8d"; font.pixelSize: 11
+                    color: Theme.textSecondary; font.pixelSize: 11
                 }
             }
 
@@ -4766,7 +3488,7 @@ ApplicationWindow {
             Rectangle {
                 Layout.fillWidth: true; Layout.fillHeight: true
                 Layout.minimumHeight: 90
-                border.color: "#dee2e6"; radius: 5
+                border.color: Theme.border; radius: 5
 
                 ListView {
                     id: dcListView; anchors.fill: parent; anchors.margins: 5; clip: true; spacing: 4
@@ -4774,11 +3496,11 @@ ApplicationWindow {
                     delegate: Rectangle {
                         width: dcListView.width - 10; height: 68
                         color: {
-                            if (model.status === "Delivered") return "#e8f8e8"
+                            if (model.status === "Delivered") return Theme.successWash
                             if (model.status === "Cancelled") return "#f4f4f4"
-                            return "#fff8e8"
+                            return Theme.warningWash
                         }
-                        border.color: "#e0e0e0"; radius: 4
+                        border.color: Theme.borderSubtle; radius: 4
 
                         RowLayout {
                             anchors.fill: parent; anchors.margins: 10; spacing: 12
@@ -4787,29 +3509,29 @@ ApplicationWindow {
                                 Layout.fillWidth: true; Layout.minimumWidth: 200; spacing: 3
                                 RowLayout {
                                     spacing: 8
-                                    Label { text: model.dcNo; font.bold: true; font.pixelSize: 13; color: "#2c3e50" }
+                                    Label { text: model.dcNo; font.bold: true; font.pixelSize: 13; color: Theme.textPrimary }
                                     Label {
                                         text: model.status
                                         font.pixelSize: 11; font.bold: true
                                         color: {
-                                            if (model.status === "Delivered") return "#27ae60"
-                                            if (model.status === "Cancelled") return "#95a5a6"
-                                            return "#f39c12"
+                                            if (model.status === "Delivered") return Theme.success
+                                            if (model.status === "Cancelled") return Theme.textMuted
+                                            return Theme.pending
                                         }
                                     }
                                 }
                                 Label {
                                     text: "To: " + model.partyName +
                                           "  |  " + model.summary +
-                                          "  |  Qty: " + formatQty(model.totalQty)
-                                    font.pixelSize: 11; color: "#7f8c8d"
+                                          "  |  Qty: " + Format.qty(model.totalQty)
+                                    font.pixelSize: 11; color: Theme.textSecondary
                                     Layout.fillWidth: true; elide: Text.ElideRight
                                 }
                                 Label {
                                     text: "Date: " + model.date +
                                           (model.deliveryTime !== "" ? "  |  Time: " + model.deliveryTime : "") +
                                           "  |  Delivered by: " + (model.deliveredBy || "-")
-                                    font.pixelSize: 10; color: "#95a5a6"
+                                    font.pixelSize: 10; color: Theme.textMuted
                                     Layout.fillWidth: true; elide: Text.ElideRight
                                 }
                             }
@@ -4817,11 +3539,11 @@ ApplicationWindow {
                             Button {
                                 text: "View"
                                 onClicked: {
-                                    selectedDCDetails = excelHandler.getDCByNumber(model.dcNo)
-                                    selectedDCItems = excelHandler.getDCItems(model.dcNo)
+                                    selectedDCDetails = Backend.getDCByNumber(model.dcNo)
+                                    selectedDCItems = Backend.getDCItems(model.dcNo)
                                     dcDetailsDialog.open()
                                 }
-                                contentItem: Text { text: "View"; color: "#2c3e50"; font.pixelSize: 11 }
+                                contentItem: Text { text: "View"; color: Theme.textPrimary; font.pixelSize: 11 }
                             }
                             Button {
                                 text: "PDF"
@@ -4839,19 +3561,19 @@ ApplicationWindow {
                             Button {
                                 text: "Delivered"
                                 visible: model.status === "Draft"
-                                onClicked: { excelHandler.updateDCStatus(model.dcNo, "Delivered"); refreshDCList() }
-                                contentItem: Text { text: "Delivered"; color: "#27ae60"; font.pixelSize: 11 }
+                                onClicked: { Backend.updateDCStatus(model.dcNo, "Delivered"); refreshDCList() }
+                                contentItem: Text { text: "Delivered"; color: Theme.success; font.pixelSize: 11 }
                             }
                             Button {
                                 text: "Cancel"
                                 visible: model.status !== "Cancelled"
-                                onClicked: { excelHandler.updateDCStatus(model.dcNo, "Cancelled"); refreshDCList() }
-                                contentItem: Text { text: "Cancel"; color: "#e67e22"; font.pixelSize: 11 }
+                                onClicked: { Backend.updateDCStatus(model.dcNo, "Cancelled"); refreshDCList() }
+                                contentItem: Text { text: "Cancel"; color: Theme.warning; font.pixelSize: 11 }
                             }
                             Button {
                                 text: "Delete"
                                 onClicked: { dcPendingDelete = model.dcNo; dcDeleteConfirmDialog.open() }
-                                contentItem: Text { text: "Delete"; color: "#e74c3c"; font.pixelSize: 11 }
+                                contentItem: Text { text: "Delete"; color: Theme.danger; font.pixelSize: 11 }
                             }
                         }
                     }
@@ -4865,7 +3587,7 @@ ApplicationWindow {
                     text: dcSearchField.text.trim() === ""
                           ? "No delivery challans yet"
                           : "No challans match \"" + dcSearchField.text.trim() + "\""
-                    visible: dcListModel.count === 0; color: "#95a5a6"
+                    visible: dcListModel.count === 0; color: Theme.textMuted
                 }
             }
 
@@ -4898,7 +3620,7 @@ ApplicationWindow {
         }
 
         onAccepted: {
-            if (excelHandler.deleteDeliveryChallan(dcPendingDelete)) {
+            if (Backend.deleteDeliveryChallan(dcPendingDelete)) {
                 if (editingDCNumber === dcPendingDelete) clearDcForm()
                 statusLabel.text = "Deleted " + dcPendingDelete
                 statusTimer.restart()
@@ -4915,7 +3637,7 @@ ApplicationWindow {
     function refreshDcPartPicker(filter) {
         dcPartPickerModel.clear()
         var f = (filter || "").toString().trim().toLowerCase()
-        var items = excelHandler.getItemMasterList()
+        var items = Backend.getItemMasterList()
         for (var i = 0; i < items.length; i++) {
             var it = items[i]
             var partName = (it.partName || "").toString()
@@ -4971,7 +3693,7 @@ ApplicationWindow {
 
             Rectangle {
                 Layout.fillWidth: true; Layout.fillHeight: true
-                border.color: "#dee2e6"; radius: 4
+                border.color: Theme.border; radius: 4
 
                 ListView {
                     id: dcPartPickerView
@@ -4979,7 +3701,7 @@ ApplicationWindow {
                     model: dcPartPickerModel
                     delegate: Rectangle {
                         width: dcPartPickerView.width - 10; height: 46
-                        color: "#fff"; border.color: "#e0e0e0"; radius: 3
+                        color: "#fff"; border.color: Theme.borderSubtle; radius: 3
                         MouseArea {
                             anchors.fill: parent
                             cursorShape: Qt.PointingHandCursor
@@ -4990,12 +3712,12 @@ ApplicationWindow {
                         }
                         ColumnLayout {
                             anchors.fill: parent; anchors.margins: 6; spacing: 2
-                            Label { text: model.partName; font.bold: true; font.pixelSize: 12; color: "#2c3e50" }
+                            Label { text: model.partName; font.bold: true; font.pixelSize: 12; color: Theme.textPrimary }
                             Label {
                                 text: (model.partNo !== "" ? "Part No: " + model.partNo : "No part number") +
                                       (model.hsnCode !== "" ? "  |  HSN: " + model.hsnCode : "") +
                                       (model.unit !== "" ? "  |  Unit: " + model.unit : "")
-                                font.pixelSize: 10; color: "#7f8c8d"
+                                font.pixelSize: 10; color: Theme.textSecondary
                             }
                         }
                     }
@@ -5004,7 +3726,7 @@ ApplicationWindow {
                 Label {
                     anchors.centerIn: parent
                     text: "No matching items"
-                    visible: dcPartPickerModel.count === 0; color: "#95a5a6"
+                    visible: dcPartPickerModel.count === 0; color: Theme.textMuted
                 }
             }
         }
@@ -5034,7 +3756,7 @@ ApplicationWindow {
 
             Rectangle {
                 Layout.fillWidth: true; Layout.fillHeight: true
-                border.color: "#dee2e6"; radius: 4
+                border.color: Theme.border; radius: 4
 
                 ListView {
                     id: dcPartyPickerView
@@ -5042,7 +3764,7 @@ ApplicationWindow {
                     model: dcPartyPickerModel
                     delegate: Rectangle {
                         width: dcPartyPickerView.width - 10; height: 58
-                        color: "#fff"; border.color: "#e0e0e0"; radius: 3
+                        color: "#fff"; border.color: Theme.borderSubtle; radius: 3
                         MouseArea {
                             anchors.fill: parent
                             cursorShape: Qt.PointingHandCursor
@@ -5055,18 +3777,18 @@ ApplicationWindow {
                             anchors.fill: parent; anchors.margins: 6; spacing: 2
                             RowLayout {
                                 spacing: 8
-                                Label { text: model.name; font.bold: true; font.pixelSize: 12; color: "#2c3e50" }
+                                Label { text: model.name; font.bold: true; font.pixelSize: 12; color: Theme.textPrimary }
                                 Label { text: model.source; font.pixelSize: 10; color: "#1b9dd9" }
                             }
                             Label {
                                 text: model.address.replace(/\n/g, ", ")
-                                font.pixelSize: 10; color: "#7f8c8d"
+                                font.pixelSize: 10; color: Theme.textSecondary
                                 Layout.fillWidth: true; elide: Text.ElideRight
                             }
                             Label {
                                 text: (model.phone !== "" ? model.phone : "") +
                                       (model.gstin !== "" ? "  |  GSTIN: " + model.gstin : "")
-                                font.pixelSize: 10; color: "#95a5a6"
+                                font.pixelSize: 10; color: Theme.textMuted
                             }
                         }
                     }
@@ -5078,7 +3800,7 @@ ApplicationWindow {
                     horizontalAlignment: Text.AlignHCenter
                     wrapMode: Text.WordWrap
                     text: "No matching parties. Type the details in directly - they are remembered for next time."
-                    visible: dcPartyPickerModel.count === 0; color: "#95a5a6"
+                    visible: dcPartyPickerModel.count === 0; color: Theme.textMuted
                 }
             }
         }
@@ -5135,17 +3857,17 @@ ApplicationWindow {
                 Label { text: selectedDCDetails.receivedBy || "-"; Layout.fillWidth: true }
             }
 
-            Rectangle { Layout.fillWidth: true; height: 1; color: "#e0e0e0" }
+            Rectangle { Layout.fillWidth: true; height: 1; color: Theme.borderSubtle }
 
             Label {
                 text: "Items (" + selectedDCItems.length + ")"
-                font.bold: true; color: "#2c3e50"
+                font.bold: true; color: Theme.textPrimary
             }
 
             Rectangle {
                 Layout.fillWidth: true
                 Layout.preferredHeight: Math.min(220, 8 + selectedDCItems.length * 26)
-                border.color: "#dee2e6"; radius: 4
+                border.color: Theme.border; radius: 4
 
                 ListView {
                     id: dcDetailItemsView
@@ -5156,8 +3878,8 @@ ApplicationWindow {
                         height: 26
                         spacing: 10
                         Label { text: (index + 1) + ". " + modelData.itemName; font.pixelSize: 11; Layout.fillWidth: true; elide: Text.ElideRight }
-                        Label { text: modelData.hsnCode; font.pixelSize: 11; color: "#7f8c8d"; Layout.preferredWidth: 120 }
-                        Label { text: formatQty(modelData.qty) + " " + modelData.unit; font.pixelSize: 11; font.bold: true; Layout.preferredWidth: 110; horizontalAlignment: Text.AlignRight }
+                        Label { text: modelData.hsnCode; font.pixelSize: 11; color: Theme.textSecondary; Layout.preferredWidth: 120 }
+                        Label { text: Format.qty(modelData.qty) + " " + modelData.unit; font.pixelSize: 11; font.bold: true; Layout.preferredWidth: 110; horizontalAlignment: Text.AlignRight }
                     }
                 }
             }
@@ -5175,108 +3897,17 @@ ApplicationWindow {
 
     /* ---- Printed challan preview ---- */
 
-    Dialog {
+    DcPdfPreviewDialog {
         id: dcPdfPreviewDialog
-        title: "Delivery Challan " + dcPreviewDcNo
-        modal: true
-        anchors.centerIn: parent
-        width: Math.min(root.width - 80, 940)
-        height: Math.min(root.height - 60, 900)
-        standardButtons: Dialog.NoButton
-
-        ColumnLayout {
-            anchors.fill: parent
-            spacing: 8
-
-            Rectangle {
-                Layout.fillWidth: true
-                Layout.fillHeight: true
-                color: "#525659"
-                radius: 4
-
-                ListView {
-                    id: dcPreviewView
-                    anchors.fill: parent
-                    anchors.margins: 10
-                    clip: true
-                    spacing: 12
-                    model: dcPreviewPages
-                    ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded }
-
-                    delegate: Rectangle {
-                        width: dcPreviewView.width - 20
-                        // A4 aspect ratio, so the page keeps its proportions
-                        // whatever the dialog is resized to.
-                        height: width * 297 / 210
-                        color: "white"
-                        border.color: "#2c2c2c"
-
-                        Image {
-                            anchors.fill: parent
-                            source: modelData
-                            fillMode: Image.PreserveAspectFit
-                            smooth: true
-                            asynchronous: true
-                            cache: false
-                        }
-                    }
-                }
-            }
-
-            RowLayout {
-                Layout.fillWidth: true
-                spacing: 8
-
-                Label {
-                    text: dcPreviewPages.length + (dcPreviewPages.length === 1 ? " page" : " pages")
-                    font.pixelSize: 11
-                    color: "#7f8c8d"
-                }
-
-                Item { Layout.fillWidth: true }
-
-                Button {
-                    text: "Open in PDF viewer"
-                    onClicked: excelHandler.openInSystemViewer(dcPreviewPdfPath)
-                }
-                Button {
-                    text: "Close"
-                    onClicked: dcPdfPreviewDialog.close()
-                }
-                Button {
-                    text: "Save PDF"
-                    highlighted: true
-                    ToolTip.visible: hovered
-                    ToolTip.text: "Save this delivery challan as a PDF on this computer"
-                    onClicked: sendDcPdf()
-                }
-            }
-        }
+        dcNo: root.dcPreviewDcNo
+        pages: root.dcPreviewPages
+        pdfPath: root.dcPreviewPdfPath
+        onSendRequested: sendDcPdf()
     }
 
-    Dialog {
+    DcSavedDialog {
         id: dcSavedDialog
-        title: "Delivery Challan Saved"
-        modal: true
-        anchors.centerIn: parent
-        standardButtons: Dialog.Ok
-        width: 560
-
-        ColumnLayout {
-            anchors.fill: parent
-            spacing: 10
-            Label { text: "The delivery challan PDF has been saved to:"; font.bold: true }
-            Label {
-                text: dcLastSavedPdf
-                wrapMode: Text.WrapAnywhere
-                Layout.fillWidth: true
-                color: "#2c3e50"
-            }
-            Button {
-                text: "Open the file"
-                onClicked: excelHandler.openInSystemViewer(dcLastSavedPdf)
-            }
-        }
+        pdfPath: root.dcLastSavedPdf
     }
 
     /* ================= GRN (GOODS RECEIPT) DIALOG ================= */
@@ -5288,7 +3919,7 @@ ApplicationWindow {
 
     function grnLoadItems(poNo) {
         grnItemsModel.clear()
-        var lines = excelHandler.getPOItems(poNo)
+        var lines = Backend.getPOItems(poNo)
         var firstOpen = -1
         for (var i = 0; i < lines.length; i++) {
             var l = lines[i]
@@ -5330,13 +3961,13 @@ ApplicationWindow {
         ColumnLayout {
             spacing: 10; width: parent.width
 
-            Label { text: "Goods Receipt Note"; font.bold: true; font.pixelSize: 14; color: "#27ae60" }
-            Rectangle { Layout.fillWidth: true; height: 1; color: "#27ae60" }
+            Label { text: "Goods Receipt Note"; font.bold: true; font.pixelSize: 14; color: Theme.success }
+            Rectangle { Layout.fillWidth: true; height: 1; color: Theme.success }
 
             GridLayout {
                 columns: 2; rowSpacing: 8; columnSpacing: 10; Layout.fillWidth: true
 
-                Label { text: "PO No:"; font.bold: true } Label { id: grnPOLabel; text: grnPOFieldText; font.bold: true; color: "#3498db" }
+                Label { text: "PO No:"; font.bold: true } Label { id: grnPOLabel; text: grnPOFieldText; font.bold: true; color: Theme.info }
                 Label { text: "Item*:"; font.bold: true }
                 ComboBox {
                     id: grnItemCombo
@@ -5347,7 +3978,7 @@ ApplicationWindow {
                 }
                 Label { text: "Order Qty:" } Label { id: grnOrderQty; text: "" }
                 Label { text: "Already Received:" } Label { id: grnReceivedSoFar; text: "" }
-                Label { text: "Remaining:" ; font.bold: true } Label { text: grnRemainingQty.toString(); font.bold: true; color: "#e67e22" }
+                Label { text: "Remaining:" ; font.bold: true } Label { text: grnRemainingQty.toString(); font.bold: true; color: Theme.warning }
             }
 
             Rectangle { Layout.fillWidth: true; height: 1; color: "#ccc" }
@@ -5365,7 +3996,7 @@ ApplicationWindow {
             TextField {
                 id: grnReceivedByField
                 Layout.fillWidth: true
-                text: excelHandler.currentUser
+                text: Backend.currentUser
                 selectByMouse: true
             }
 
@@ -5376,14 +4007,14 @@ ApplicationWindow {
         onAccepted: {
             if (grnItemCombo.currentIndex < 0 || grnItemsModel.count === 0) return
             var itemId = grnItemsModel.get(grnItemCombo.currentIndex).itemId
-            var grnNo = excelHandler.receiveGoodsForItem(
+            var grnNo = Backend.receiveGoodsForItem(
                 itemId, grnReceivedField.value,
                 grnAcceptedField.value, grnRejectedField.value,
                 grnRemarksField.text, grnReceivedByField.text)
             if (grnNo !== "") {
                 refreshPOList()
                 refreshMovements()
-                rows = excelHandler.model.rowCount()
+                rows = Backend.model.rowCount()
             }
         }
     }
@@ -5423,8 +4054,8 @@ ApplicationWindow {
         ColumnLayout {
             spacing: 10; width: parent.width
 
-            Label { text: "Material Issue Note"; font.bold: true; font.pixelSize: 14; color: "#e67e22" }
-            Rectangle { Layout.fillWidth: true; height: 1; color: "#e67e22" }
+            Label { text: "Material Issue Note"; font.bold: true; font.pixelSize: 14; color: Theme.warning }
+            Rectangle { Layout.fillWidth: true; height: 1; color: Theme.warning }
 
             Label { text: "Search Part:" }
             TextField {
@@ -5437,18 +4068,18 @@ ApplicationWindow {
 
             Rectangle {
                 Layout.fillWidth: true; height: 100
-                border.color: "#dee2e6"; radius: 4; color: "#f8f9fa"
+                border.color: Theme.border; radius: 4; color: Theme.surfaceAlt
 
                 ListView {
                     anchors.fill: parent; anchors.margins: 4; clip: true; spacing: 4
                     model: issueSearchModel
                     delegate: Rectangle {
                         width: parent.width; height: 28
-                        color: "#fff"; border.color: "#e0e0e0"; radius: 3
+                        color: "#fff"; border.color: Theme.borderSubtle; radius: 3
                         RowLayout {
                             anchors.fill: parent; anchors.margins: 6
-                            Label { text: model.name; font.pixelSize: 12; font.bold: true; color: "#2c3e50"; Layout.fillWidth: true }
-                            Label { text: "Stock: " + model.stock; font.pixelSize: 11; color: "#27ae60" }
+                            Label { text: model.name; font.pixelSize: 12; font.bold: true; color: Theme.textPrimary; Layout.fillWidth: true }
+                            Label { text: "Stock: " + model.stock; font.pixelSize: 11; color: Theme.success }
                         }
                         MouseArea {
                             anchors.fill: parent; cursorShape: Qt.PointingHandCursor
@@ -5463,7 +4094,7 @@ ApplicationWindow {
                     anchors.centerIn: parent
                     text: "No matching parts"
                     visible: issueSearchModel.count === 0
-                    color: "#95a5a6"
+                    color: Theme.textMuted
                 }
             }
 
@@ -5495,7 +4126,7 @@ ApplicationWindow {
             // Cart: parts that will be issued together under one issue number
             Rectangle {
                 Layout.fillWidth: true; height: 96
-                border.color: "#e67e22"; radius: 4; color: "#fffaf5"
+                border.color: Theme.warning; radius: 4; color: "#fffaf5"
 
                 ListView {
                     id: issueCartView
@@ -5503,16 +4134,16 @@ ApplicationWindow {
                     model: issueCartModel
                     delegate: Rectangle {
                         width: issueCartView.width - 8; height: 24
-                        color: "#fff"; border.color: "#e0e0e0"; radius: 3
+                        color: "#fff"; border.color: Theme.borderSubtle; radius: 3
                         RowLayout {
                             anchors.fill: parent; anchors.margins: 4
                             Label { text: (index + 1) + ". " + model.partName; font.pixelSize: 11; font.bold: true; Layout.fillWidth: true; elide: Text.ElideRight }
-                            Label { text: "Qty: " + model.qty; font.pixelSize: 11; color: "#e67e22" }
+                            Label { text: "Qty: " + model.qty; font.pixelSize: 11; color: Theme.warning }
                             Button {
                                 text: "X"
                                 Layout.preferredWidth: 24; Layout.preferredHeight: 18
                                 onClicked: issueCartModel.remove(index)
-                                contentItem: Text { text: "X"; color: "#e74c3c"; font.pixelSize: 9; font.bold: true; horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter }
+                                contentItem: Text { text: "X"; color: Theme.danger; font.pixelSize: 9; font.bold: true; horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter }
                             }
                         }
                     }
@@ -5522,7 +4153,7 @@ ApplicationWindow {
                     anchors.centerIn: parent
                     text: "No parts added - use \"+ Add\" (several parts can go in one issue)"
                     visible: issueCartModel.count === 0
-                    color: "#95a5a6"; font.pixelSize: 11
+                    color: Theme.textMuted; font.pixelSize: 11
                 }
             }
 
@@ -5530,11 +4161,11 @@ ApplicationWindow {
             ComboBox { id: issueDeptField; Layout.fillWidth: true; editable: true; model: ["Electronics", "Mechanical", "Hardware", "Software", "Production", "R&D", "Other"] }
 
             Label { text: "Issued By:" }
-            TextField { id: issueByField; Layout.fillWidth: true; text: excelHandler.currentUser; selectByMouse: true }
+            TextField { id: issueByField; Layout.fillWidth: true; text: Backend.currentUser; selectByMouse: true }
 
             Rectangle { Layout.fillWidth: true; height: 1; color: "#ccc" }
 
-            Label { text: "Stock will be deducted automatically for every part in the list"; font.pixelSize: 10; color: "#e67e22"; wrapMode: Text.WordWrap }
+            Label { text: "Stock will be deducted automatically for every part in the list"; font.pixelSize: 10; color: Theme.warning; wrapMode: Text.WordWrap }
         }
 
         onAccepted: {
@@ -5553,14 +4184,14 @@ ApplicationWindow {
                 var it = issueCartModel.get(i)
                 items.push({ partName: it.partName, qty: it.qty })
             }
-            var issueNo = excelHandler.issueMultipleStock(
+            var issueNo = Backend.issueMultipleStock(
                 items, issueDeptField.currentText, issueByField.text)
             if (issueNo !== "") {
                 issueCartModel.clear()
                 issuePartField.currentIndex = -1
                 issuePartField.editText = ""
                 issueQtyField.value = 1
-                rows = excelHandler.model.rowCount()
+                rows = Backend.model.rowCount()
                 refreshMovements()
             }
         }
@@ -5569,262 +4200,44 @@ ApplicationWindow {
             issueSearchField.text = ""
             issueCartModel.clear()
             refreshIssuePartDropdown("")
-            issueByField.text = excelHandler.currentUser
+            issueByField.text = Backend.currentUser
         }
     }
 
     /* ================= STOCK MOVEMENTS DIALOG ================= */
 
-    Dialog {
+    StockMovementsDialog {
         id: movementsDialog
-        title: "Stock Movement History"
-        modal: true
-        anchors.centerIn: parent
-        width: 800; height: 600
-
-        ColumnLayout {
-            anchors.fill: parent; spacing: 10
-
-            Label { text: "Audit Trail - All Stock Movements"; font.bold: true; font.pixelSize: 16; color: "#2c3e50" }
-
-            RowLayout {
-                Layout.fillWidth: true; spacing: 10
-                TextField {
-                    id: movFilterField; Layout.fillWidth: true
-                    placeholderText: "Filter by part name..."; selectByMouse: true
-                    onTextChanged: refreshMovements()
-                }
-                Label { text: movementsModel.count + " records"; font.bold: true; color: "#7f8c8d" }
-            }
-
-            Rectangle {
-                Layout.fillWidth: true; Layout.fillHeight: true
-                border.color: "#dee2e6"; radius: 5
-
-                // Header
-                Rectangle {
-                    id: movHeader; width: parent.width; height: 30; color: "#2c3e50"
-                    Row {
-                        anchors.fill: parent; spacing: 0
-                        Repeater {
-                            model: [
-                                {text: "Date", w: 150}, {text: "Part Name", w: 180},
-                                {text: "Type", w: 80}, {text: "Qty", w: 60},
-                                {text: "Reference", w: 200}, {text: "Done By", w: 110}
-                            ]
-                            Rectangle {
-                                width: modelData.w; height: 30; color: "transparent"
-                                Text { anchors.centerIn: parent; text: modelData.text; color: "white"; font.bold: true; font.pixelSize: 11 }
-                            }
-                        }
-                    }
-                }
-
-                ListView {
-                    id: movListView
-                    anchors.top: movHeader.bottom; anchors.left: parent.left
-                    anchors.right: parent.right; anchors.bottom: parent.bottom
-                    anchors.margins: 2; clip: true; spacing: 1
-                    model: ListModel { id: movementsModel }
-                    delegate: Rectangle {
-                        width: movListView.width; height: 30
-                        color: index % 2 === 0 ? "#fff" : "#f8f9fa"
-                        Row {
-                            anchors.fill: parent; spacing: 0
-                            Rectangle { width: 150; height: 30; color: "transparent"; Text { anchors.verticalCenter: parent.verticalCenter; x: 5; text: model.date; font.pixelSize: 11 } }
-                            Rectangle { width: 180; height: 30; color: "transparent"; Text { anchors.verticalCenter: parent.verticalCenter; x: 5; text: model.partName; font.pixelSize: 11; font.bold: true } }
-                            Rectangle {
-                                width: 80; height: 30; color: "transparent"
-                                Text {
-                                    anchors.verticalCenter: parent.verticalCenter; x: 5; text: model.type; font.pixelSize: 11; font.bold: true
-                                    color: {
-                                        if (model.type === "IN") return "#27ae60"
-                                        if (model.type === "OUT") return "#e74c3c"
-                                        if (model.type === "REJECTED") return "#e67e22"
-                                        return "#3498db"
-                                    }
-                                }
-                            }
-                            Rectangle { width: 60; height: 30; color: "transparent"; Text { anchors.verticalCenter: parent.verticalCenter; x: 5; text: model.qty; font.pixelSize: 11; font.bold: true } }
-                            Rectangle { width: 200; height: 30; color: "transparent"; Text { anchors.verticalCenter: parent.verticalCenter; x: 5; text: model.reference; font.pixelSize: 11; color: "#7f8c8d" } }
-                            Rectangle { width: 110; height: 30; color: "transparent"; Text { anchors.verticalCenter: parent.verticalCenter; x: 5; text: model.doneBy; font.pixelSize: 11 } }
-                        }
-                    }
-                }
-
-                Label { anchors.centerIn: parent; y: 30; text: "No movements recorded"; visible: movementsModel.count === 0; color: "#95a5a6" }
-            }
-
-            Button { text: "Close"; Layout.alignment: Qt.AlignRight; onClicked: movementsDialog.close() }
-        }
-
-        onOpened: { refreshMovements() }
+        onRefreshRequested: refreshMovements()
     }
 
     /* ================= REPORTS DIALOG ================= */
 
-    Dialog {
-        id: reportsDialog
-        title: "Export Reports"
-        modal: true
-        anchors.centerIn: parent
-        standardButtons: Dialog.Close
-        width: 420
-
-        ColumnLayout {
-            anchors.fill: parent; spacing: 10
-            Label { text: "Export stock movements, issues, GRN, and POs"; font.bold: true }
-
-            Label { text: "From Date (YYYY-MM-DD):" }
-            TextField { id: reportFromField; Layout.fillWidth: true; placeholderText: "2025-01-01" }
-
-            Label { text: "To Date (YYYY-MM-DD):" }
-            TextField { id: reportToField; Layout.fillWidth: true; placeholderText: "2025-01-31" }
-
-            RowLayout {
-                Layout.fillWidth: true
-                Button {
-                    text: "Export"
-                    highlighted: true
-                    onClicked: {
-                        var path = excelHandler.browseSaveFile("Save Report", "Excel files (*.xlsx)")
-                        if (path === "") return
-                        if (excelHandler.exportReport(reportFromField.text, reportToField.text, path)) {
-                            statusLabel.text = "Report saved"
-                            statusTimer.restart()
-                        }
-                    }
-                }
-                Item { Layout.fillWidth: true }
-            }
-        }
-    }
+    ReportsDialog { id: reportsDialog }
 
     function refreshMovements() {
         movementsModel.clear()
-        var movements = excelHandler.getStockMovements(movFilterField.text)
+        var movements = Backend.getStockMovements(movFilterField.text)
         for (var i = movements.length - 1; i >= 0; i--) movementsModel.append(movements[i])
     }
 
     /* ================= LOW STOCK ALERT DIALOG ================= */
 
-    Dialog {
+    LowStockDialog {
         id: lowStockDialog
-        title: "Low Stock Alerts"
-        modal: true
-        anchors.centerIn: parent
-        width: 700; height: 500
-
-        ColumnLayout {
-            anchors.fill: parent; spacing: 10
-
-            Label { text: "Items Below Reorder Level"; font.bold: true; font.pixelSize: 16; color: "#e74c3c" }
-
-            Rectangle {
-                Layout.fillWidth: true; Layout.fillHeight: true
-                border.color: "#dee2e6"; radius: 5
-
-                ListView {
-                    id: lowStockListView; anchors.fill: parent; anchors.margins: 5; clip: true; spacing: 4
-                    model: ListModel { id: lowStockModel }
-                    delegate: Rectangle {
-                        width: lowStockListView.width - 10; height: 60
-                        color: "#fff5f5"; border.color: "#e74c3c"; border.width: 1; radius: 4
-                        RowLayout {
-                            anchors.fill: parent; anchors.margins: 8
-                            ColumnLayout {
-                                Layout.fillWidth: true; spacing: 2
-                                Label { text: model.partName + (model.partNo ? "  (" + model.partNo + ")" : ""); font.bold: true; font.pixelSize: 13 }
-                                Label {
-                                    text: "Stock: " + model.stock + " | Required: " + model.requiredQty + " | On order: " + model.onOrder + " | Shortage: " + model.shortage
-                                    font.pixelSize: 11; color: "#e74c3c"
-                                }
-                            }
-                            Label { text: model.vendor ? "Vendor: " + model.vendor : "No vendor set!"; font.pixelSize: 11; color: model.vendor ? "#7f8c8d" : "#e74c3c" }
-                        }
-                    }
-                }
-
-                Label { anchors.centerIn: parent; text: "All stock levels are OK!"; visible: lowStockModel.count === 0; color: "#27ae60"; font.pixelSize: 14 }
-            }
-
-            RowLayout {
-                Layout.fillWidth: true
-                Button {
-                    text: "Auto-Generate PO for Low Stock"
-                    highlighted: true
-                    enabled: lowStockModel.count > 0
-                    onClicked: {
-                        if (excelHandler.autoGeneratePOForLowStock()) {
-                            statusLabel.text = "Draft PO generated for low stock items"
-                            statusTimer.restart()
-                            refreshLowStock()
-                            refreshPOList()
-                        }
-                    }
-                }
-                Item { Layout.fillWidth: true }
-                Button { text: "Close"; onClicked: lowStockDialog.close() }
-            }
-        }
-
-        onOpened: { refreshLowStock() }
+        onRefreshRequested: refreshLowStock()
+        onOrderChanged: refreshPOList()
     }
 
     function refreshLowStock() {
         lowStockModel.clear()
-        var items = excelHandler.getLowStockItems()
+        var items = Backend.getLowStockItems()
         for (var i = 0; i < items.length; i++) lowStockModel.append(items[i])
     }
 
     /* ================= ISSUE NOTES LIST DIALOG ================= */
 
-    Dialog {
-        id: issueNotesDialog
-        title: "Issue Notes History"
-        modal: true
-        anchors.centerIn: parent
-        width: 700; height: 500
-
-        ColumnLayout {
-            anchors.fill: parent; spacing: 10
-
-            Label { text: "Material Issue History"; font.bold: true; font.pixelSize: 16; color: "#e67e22" }
-
-            Rectangle {
-                Layout.fillWidth: true; Layout.fillHeight: true
-                border.color: "#dee2e6"; radius: 5
-
-                ListView {
-                    id: issueNotesListView; anchors.fill: parent; anchors.margins: 5; clip: true; spacing: 4
-                    model: ListModel { id: issueNotesModel }
-                    delegate: Rectangle {
-                        width: issueNotesListView.width - 10; height: 50
-                        color: "#fff"; border.color: "#e67e22"; border.width: 1; radius: 4
-                        RowLayout {
-                            anchors.fill: parent; anchors.margins: 8
-                            Label { text: model.issueNo; font.bold: true; color: "#e67e22"; Layout.preferredWidth: 100 }
-                            ColumnLayout {
-                                Layout.fillWidth: true; spacing: 2
-                                Label { text: model.partName + " x" + model.qty; font.bold: true; font.pixelSize: 12 }
-                                Label { text: "To: " + model.department + " | By: " + model.issuedBy + " | " + model.date; font.pixelSize: 10; color: "#7f8c8d" }
-                            }
-                        }
-                    }
-                }
-
-                Label { anchors.centerIn: parent; text: "No issues recorded"; visible: issueNotesModel.count === 0; color: "#95a5a6" }
-            }
-
-            Button { text: "Close"; Layout.alignment: Qt.AlignRight; onClicked: issueNotesDialog.close() }
-        }
-
-        onOpened: {
-            issueNotesModel.clear()
-            var notes = excelHandler.getIssueNotes()
-            for (var i = 0; i < notes.length; i++) issueNotesModel.append(notes[i])
-        }
-    }
+    IssueNotesDialog { id: issueNotesDialog }
 
     /* ================= DATABASE CONNECTION DIALOG ================= */
 
@@ -5838,22 +4251,22 @@ ApplicationWindow {
     property string dbConfiguredHost: ""
 
     function refreshDbConnectionState() {
-        var cfg = excelHandler.getDatabaseSettings()
-        root.dbOnServer = excelHandler.isDatabaseServerBackend()
+        var cfg = Backend.getDatabaseSettings()
+        root.dbOnServer = Backend.isDatabaseServerBackend()
         root.dbConfiguredHost = cfg.host || ""
         root.dbUsingLocalFallback = (cfg.driver === "QPSQL") && !root.dbOnServer
-        root.dbFallbackReason = excelHandler.databaseLastError()
+        root.dbFallbackReason = Backend.databaseLastError()
     }
 
     function retryDatabaseConnection() {
-        var cfg = excelHandler.getDatabaseSettings()
+        var cfg = Backend.getDatabaseSettings()
         statusLabel.text = "Reconnecting to " + cfg.host + "..."
-        excelHandler.configureDatabase(cfg.driver, cfg.host, cfg.port,
+        Backend.configureDatabase(cfg.driver, cfg.host, cfg.port,
                                        cfg.name, cfg.user, cfg.password)
         refreshDbConnectionState()
         if (root.dbOnServer) {
-            rows = excelHandler.model.rowCount()
-            columns = excelHandler.model.columnCount()
+            rows = Backend.model.rowCount()
+            columns = Backend.model.columnCount()
             root.tableRefreshToken++
             refreshStockOverview()
             statusLabel.text = "Connected to the shared database"
@@ -5872,16 +4285,16 @@ ApplicationWindow {
         anchors.centerIn: parent
 
         onOpened: {
-            root.dbOnServer = excelHandler.isDatabaseServerBackend()
+            root.dbOnServer = Backend.isDatabaseServerBackend()
             dbCopyResult.text = ""
-            var cfg = excelHandler.getDatabaseSettings()
+            var cfg = Backend.getDatabaseSettings()
             dbDriverCombo.currentIndex = (cfg.driver === "QPSQL") ? 1 : 0
             dbHostField.text = cfg.host !== undefined ? cfg.host : ""
             dbPortField.text = (cfg.port !== undefined ? cfg.port : 5432).toString()
             dbNameField.text = cfg.name !== undefined ? cfg.name : "stockmanager"
             dbUserField.text = cfg.user !== undefined ? cfg.user : ""
             dbPassField.text = cfg.password !== undefined ? cfg.password : ""
-            dbStatusLabel.text = excelHandler.databaseStatus()
+            dbStatusLabel.text = Backend.databaseStatus()
             serverInfoBox.visible = false
             root.dbSetupBusy = false
         }
@@ -5897,21 +4310,21 @@ ApplicationWindow {
 
             Label {
                 text: "All data is stored in one shared database so everyone works on the same\nnumbers. Pick ONE computer to be the server; every other computer connects to it."
-                color: "#7f8c8d"; font.pixelSize: 12; Layout.fillWidth: true; wrapMode: Text.WordWrap
+                color: Theme.textSecondary; font.pixelSize: 12; Layout.fillWidth: true; wrapMode: Text.WordWrap
             }
 
             /* -------- Option 1: make THIS computer the server -------- */
             Rectangle {
                 Layout.fillWidth: true; radius: 6
-                color: "#f4f9ff"; border.color: "#3498db"; border.width: 1
+                color: "#f4f9ff"; border.color: Theme.info; border.width: 1
                 implicitHeight: serverSetupCol.implicitHeight + 24
                 ColumnLayout {
                     id: serverSetupCol
                     anchors.fill: parent; anchors.margins: 12; spacing: 8
-                    Label { text: "① Make this computer the server"; font.bold: true; color: "#2c3e50" }
+                    Label { text: "① Make this computer the server"; font.bold: true; color: Theme.textPrimary }
                     Label {
                         text: "Installs and configures the shared database on THIS computer. Do this on\njust one machine (the one that stays on). You'll be asked for your system password."
-                        color: "#7f8c8d"; font.pixelSize: 11; Layout.fillWidth: true; wrapMode: Text.WordWrap
+                        color: Theme.textSecondary; font.pixelSize: 11; Layout.fillWidth: true; wrapMode: Text.WordWrap
                     }
                     RowLayout {
                         spacing: 10; Layout.fillWidth: true
@@ -5922,7 +4335,7 @@ ApplicationWindow {
                                 root.dbSetupBusy = true
                                 serverInfoBox.visible = false
                                 dbStatusLabel.text = "Starting server setup..."
-                                excelHandler.setupThisComputerAsServer()
+                                Backend.setupThisComputerAsServer()
                             }
                         }
                         BusyIndicator { running: root.dbSetupBusy; visible: root.dbSetupBusy; implicitWidth: 28; implicitHeight: 28 }
@@ -5931,7 +4344,7 @@ ApplicationWindow {
                         id: serverInfoBox
                         visible: false
                         Layout.fillWidth: true; radius: 4
-                        color: "#eafaf1"; border.color: "#27ae60"; border.width: 1
+                        color: "#eafaf1"; border.color: Theme.success; border.width: 1
                         implicitHeight: serverInfoCol.implicitHeight + 20
                         ColumnLayout {
                             id: serverInfoCol
@@ -5941,14 +4354,14 @@ ApplicationWindow {
                             Label { text: "   Host: " + dbHostField.text + "   Port: " + dbPortField.text; font.pixelSize: 11; font.family: "monospace"; color: "#145a32" }
                             Label { text: "   Database: " + dbNameField.text + "   User: " + dbUserField.text; font.pixelSize: 11; font.family: "monospace"; color: "#145a32" }
                             Label { text: "   Password: " + dbPassField.text; font.pixelSize: 11; font.family: "monospace"; color: "#145a32" }
-                            Label { text: "Write these down — the password is shown only here."; font.pixelSize: 10; font.italic: true; color: "#7f8c8d"; Layout.topMargin: 4 }
+                            Label { text: "Write these down — the password is shown only here."; font.pixelSize: 10; font.italic: true; color: Theme.textSecondary; Layout.topMargin: 4 }
                         }
                     }
                 }
             }
 
             /* -------- Option 2: connect to an existing server -------- */
-            Label { text: "② Or connect to a server / choose storage"; font.bold: true; color: "#2c3e50" }
+            Label { text: "② Or connect to a server / choose storage"; font.bold: true; color: Theme.textPrimary }
             ComboBox {
                 id: dbDriverCombo; Layout.fillWidth: true
                 model: ["SQLite (local file — this computer only)", "PostgreSQL (connect to shared server)"]
@@ -5964,39 +4377,39 @@ ApplicationWindow {
                 Label { text: "Password:" } TextField { id: dbPassField; Layout.fillWidth: true; echoMode: TextInput.Password }
             }
 
-            Label { id: dbStatusLabel; text: ""; color: "#2c3e50"; Layout.fillWidth: true; wrapMode: Text.WordWrap }
+            Label { id: dbStatusLabel; text: ""; color: Theme.textPrimary; Layout.fillWidth: true; wrapMode: Text.WordWrap }
 
             /* -------- Option 3: bring existing work onto the server -------- */
             Rectangle {
                 Layout.fillWidth: true; radius: 6
                 color: root.dbOnServer ? "#fdf6e3" : "#f6f6f6"
-                border.color: root.dbOnServer ? "#e67e22" : "#dcdcdc"; border.width: 1
+                border.color: root.dbOnServer ? Theme.warning : "#dcdcdc"; border.width: 1
                 implicitHeight: dbCopyCol.implicitHeight + 24
                 ColumnLayout {
                     id: dbCopyCol
                     anchors.fill: parent; anchors.margins: 12; spacing: 8
-                    Label { text: "\u2462 Bring this computer's existing work onto the server"; font.bold: true; color: "#2c3e50" }
+                    Label { text: "\u2462 Bring this computer's existing work onto the server"; font.bold: true; color: Theme.textPrimary }
                     Label {
                         text: "Run this ONCE, on the computer that already has your stock, item master and\npurchase orders. It copies them into the shared database so every other computer\nsees them, and carries PO/GRN numbering on from where you are."
-                        color: "#7f8c8d"; font.pixelSize: 11; Layout.fillWidth: true; wrapMode: Text.WordWrap
+                        color: Theme.textSecondary; font.pixelSize: 11; Layout.fillWidth: true; wrapMode: Text.WordWrap
                     }
                     Label {
                         text: "Connect to the shared server above first \u2014 this step needs a server connection."
                         visible: !root.dbOnServer
-                        color: "#c0392b"; font.pixelSize: 11; Layout.fillWidth: true; wrapMode: Text.WordWrap
+                        color: Theme.dangerStrong; font.pixelSize: 11; Layout.fillWidth: true; wrapMode: Text.WordWrap
                     }
                     Button {
                         text: "Copy this computer's data to the server"
                         enabled: root.dbOnServer && !root.dbSetupBusy
                         onClicked: {
-                            var res = excelHandler.copyLocalDataToServer()
+                            var res = Backend.copyLocalDataToServer()
                             dbCopyResult.text = res.message || ""
                             dbCopyResult.isError = !res.success
                             if (res.success) {
                                 // The stock grid and PO list are showing the
                                 // pre-copy server contents; refresh both.
-                                root.rows = excelHandler.model.rowCount()
-                                root.columns = excelHandler.model.columnCount()
+                                root.rows = Backend.model.rowCount()
+                                root.columns = Backend.model.columnCount()
                                 root.tableRefreshToken++
                                 refreshPOList()
                                 statusLabel.text = res.message
@@ -6008,7 +4421,7 @@ ApplicationWindow {
                         id: dbCopyResult
                         property bool isError: false
                         text: ""; visible: text !== ""
-                        color: isError ? "#c0392b" : "#1e8449"
+                        color: isError ? Theme.dangerStrong : "#1e8449"
                         font.pixelSize: 11; font.bold: true
                         Layout.fillWidth: true; wrapMode: Text.WordWrap
                     }
@@ -6023,7 +4436,7 @@ ApplicationWindow {
                     onClicked: {
                         var wantServer = dbDriverCombo.currentIndex === 1
                         var driver = wantServer ? "QPSQL" : "QSQLITE"
-                        excelHandler.configureDatabase(
+                        Backend.configureDatabase(
                             driver, dbHostField.text, parseInt(dbPortField.text) || 5432,
                             dbNameField.text, dbUserField.text, dbPassField.text)
 
@@ -6032,13 +4445,13 @@ ApplicationWindow {
                         // user asked for the shared server but we did NOT end
                         // up on a server backend, that's a real failure the
                         // user must see — otherwise their edits won't be shared.
-                        if (wantServer && !excelHandler.isDatabaseServerBackend()) {
+                        if (wantServer && !Backend.isDatabaseServerBackend()) {
                             dbStatusLabel.text =
                                 "Could NOT connect to PostgreSQL — using a LOCAL file, so data will NOT be shared.\n"
-                                + "Reason: " + excelHandler.databaseLastError()
+                                + "Reason: " + Backend.databaseLastError()
                             statusLabel.text = "PostgreSQL connection failed (using local file)"
                         } else {
-                            dbStatusLabel.text = excelHandler.databaseStatus()
+                            dbStatusLabel.text = Backend.databaseStatus()
                             statusLabel.text = wantServer ? "Connected to shared database"
                                                           : "Using local database (this computer only)"
                             refreshDbConnectionState()
@@ -6066,7 +4479,7 @@ ApplicationWindow {
             //     text: "New Stock"
             //     onClicked: newStockFileDialog.open()
             //     ToolTip.visible: hovered; ToolTip.text: "Create new stock file"
-            //     contentItem: Text { text: parent.text; color: "#27ae60"; horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter; font.bold: true; font.pixelSize: 11 }
+            //     contentItem: Text { text: parent.text; color: Theme.success; horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter; font.bold: true; font.pixelSize: 11 }
             // }
 
             ToolButton {
@@ -6080,13 +4493,13 @@ ApplicationWindow {
                 enabled: loginDialog.isAuthenticated
                 onClicked: importStockFileAction()
                 ToolTip.visible: hovered; ToolTip.text: "Import a stock xlsx into the shared database (login required)"
-                contentItem: Text { text: parent.text; color: parent.enabled ? "#f39c12" : "#7f8c8d"; horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter; font.bold: true; font.pixelSize: 11 }
+                contentItem: Text { text: parent.text; color: parent.enabled ? Theme.pending : "#7f8c8d"; horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter; font.bold: true; font.pixelSize: 11 }
             }
 
             ToolButton {
                 text: "Save"
-                enabled: excelHandler.currentFile !== "" && loginDialog.isAuthenticated
-                onClicked: excelHandler.saveExcel("")
+                enabled: Backend.currentFile !== "" && loginDialog.isAuthenticated
+                onClicked: Backend.saveExcel("")
                 contentItem: Text { text: parent.text; color: parent.enabled ? "white" : "#7f8c8d"; horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter; font.pixelSize: 11 }
             }
 
@@ -6097,7 +4510,7 @@ ApplicationWindow {
                 contentItem: Text { text: parent.text; color: parent.enabled ? "white" : "#7f8c8d"; horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter; font.pixelSize: 11 }
             }
 
-            ToolSeparator { contentItem: Rectangle { implicitWidth: 1; implicitHeight: 24; color: "#7f8c8d" } }
+            ToolSeparator { contentItem: Rectangle { implicitWidth: 1; implicitHeight: 24; color: Theme.textSecondary } }
 
             // SUPPLY CHAIN BUTTONS
             ToolButton {
@@ -6116,14 +4529,14 @@ ApplicationWindow {
 
             ToolButton {
                 text: {
-                    var count = excelHandler.pendingRequestCount
+                    var count = Backend.pendingRequestCount
                     return "Purchase Requests" + (count > 0 ? " (" + count + ")" : "")
                 }
                 onClicked: prDialog.open()
                 ToolTip.visible: hovered; ToolTip.text: "Ask for something to be bought, and see every open request"
                 contentItem: Text {
                     text: parent.text
-                    color: excelHandler.pendingRequestCount > 0 ? "#e67e22" : "#f1c40f"
+                    color: Backend.pendingRequestCount > 0 ? Theme.warning : "#f1c40f"
                     horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter
                     font.bold: true; font.pixelSize: 11
                 }
@@ -6134,7 +4547,7 @@ ApplicationWindow {
                 enabled: loginDialog.isAuthenticated
                 onClicked: poDialog.open()
                 ToolTip.visible: hovered; ToolTip.text: "Create/manage purchase orders"
-                contentItem: Text { text: parent.text; color: parent.enabled ? "#3498db" : "#7f8c8d"; horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter; font.bold: true; font.pixelSize: 11 }
+                contentItem: Text { text: parent.text; color: parent.enabled ? Theme.info : "#7f8c8d"; horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter; font.bold: true; font.pixelSize: 11 }
             }
 
             ToolButton {
@@ -6150,7 +4563,7 @@ ApplicationWindow {
                 enabled: loginDialog.isAuthenticated
                 onClicked: issueDialog.open()
                 ToolTip.visible: hovered; ToolTip.text: "Issue stock to department"
-                contentItem: Text { text: parent.text; color: parent.enabled ? "#e67e22" : "#7f8c8d"; horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter; font.bold: true; font.pixelSize: 11 }
+                contentItem: Text { text: parent.text; color: parent.enabled ? Theme.warning : "#7f8c8d"; horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter; font.bold: true; font.pixelSize: 11 }
             }
 
             ToolButton {
@@ -6169,33 +4582,33 @@ ApplicationWindow {
 
             ToolButton {
                 text: {
-                    var count = excelHandler.lowStockCount
+                    var count = Backend.lowStockCount
                     return "Low Stock" + (count > 0 ? " (" + count + ")" : "")
                 }
                 onClicked: lowStockDialog.open()
                 ToolTip.visible: hovered; ToolTip.text: "View low stock alerts"
                 contentItem: Text {
                     text: parent.text
-                    color: excelHandler.lowStockCount > 0 ? "#e74c3c" : "#27ae60"
+                    color: Backend.lowStockCount > 0 ? Theme.danger : Theme.success
                     horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter
                     font.bold: true; font.pixelSize: 11
                 }
             }
 
-            ToolSeparator { contentItem: Rectangle { implicitWidth: 1; implicitHeight: 24; color: "#7f8c8d" } }
+            ToolSeparator { contentItem: Rectangle { implicitWidth: 1; implicitHeight: 24; color: Theme.textSecondary } }
 
             // STOCK OPERATIONS
             ToolButton {
                 text: "Search"
                 onClicked: searchDialog.open()
-                contentItem: Text { text: parent.text; color: "#3498db"; horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter; font.bold: true; font.pixelSize: 11 }
+                contentItem: Text { text: parent.text; color: Theme.info; horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter; font.bold: true; font.pixelSize: 11 }
             }
 
             ToolButton {
                 text: "Add Item"
                 enabled: loginDialog.isAuthenticated
                 onClicked: addItemDialog.open()
-                contentItem: Text { text: parent.text; color: parent.enabled ? "#3498db" : "#7f8c8d"; horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter; font.bold: true; font.pixelSize: 11 }
+                contentItem: Text { text: parent.text; color: parent.enabled ? Theme.info : "#7f8c8d"; horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter; font.bold: true; font.pixelSize: 11 }
             }
 
             ToolButton {
@@ -6204,8 +4617,8 @@ ApplicationWindow {
                 ToolTip.visible: hovered
                 ToolTip.text: "Add an empty row, then right-click it to fill it in"
                 onClicked: {
-                    excelHandler.model.addRow()
-                    rows = excelHandler.model.rowCount()
+                    Backend.model.addRow()
+                    rows = Backend.model.rowCount()
                     statusLabel.text = "Row added - right-click it and choose Edit Row to fill it in"
                     statusTimer.restart()
                 }
@@ -6216,7 +4629,7 @@ ApplicationWindow {
                 text: "Issued History"
                 onClicked: issueNotesDialog.open()
                 ToolTip.visible: hovered; ToolTip.text: "View issue notes history"
-                contentItem: Text { text: parent.text; color: "#e67e22"; horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter; font.bold: true; font.pixelSize: 11 }
+                contentItem: Text { text: parent.text; color: Theme.warning; horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter; font.bold: true; font.pixelSize: 11 }
             }
 
             Item { Layout.fillWidth: true }
@@ -6231,21 +4644,21 @@ ApplicationWindow {
             // STATUS
             Label {
                 text: loginDialog.isAuthenticated ?
-                      (excelHandler.hasUnsavedChanges ? "Unsaved" : "Saved") : "Read-Only"
+                      (Backend.hasUnsavedChanges ? "Unsaved" : "Saved") : "Read-Only"
                 color: loginDialog.isAuthenticated ?
-                       (excelHandler.hasUnsavedChanges ? "#e74c3c" : "#2ecc71") : "#f39c12"
+                       (Backend.hasUnsavedChanges ? "#e74c3c" : "#2ecc71") : Theme.pending
                 font.bold: true; font.pixelSize: 11
             }
 
-            Label { text: excelHandler.currentUser; color: "white"; font.pixelSize: 11 }
+            Label { text: Backend.currentUser; color: "white"; font.pixelSize: 11 }
 
             // DATABASE
             ToolButton {
                 text: "Refresh"
                 onClicked: {
-                    excelHandler.refreshFromDatabase()
-                    rows = excelHandler.model.rowCount()
-                    columns = excelHandler.model.columnCount()
+                    Backend.refreshFromDatabase()
+                    rows = Backend.model.rowCount()
+                    columns = Backend.model.columnCount()
                     root.tableRefreshToken++
                     refreshStockOverview()
                     statusLabel.text = "Refreshed from database"
@@ -6280,7 +4693,7 @@ ApplicationWindow {
         // reaches the people who expect to see it.
         Rectangle {
             Layout.fillWidth: true; Layout.preferredHeight: 44
-            color: "#fdecea"; border.color: "#e74c3c"; border.width: 1
+            color: Theme.dangerWash; border.color: Theme.danger; border.width: 1
             visible: root.dbUsingLocalFallback
 
             RowLayout {
@@ -6292,7 +4705,7 @@ ApplicationWindow {
                         text: "Not connected to the shared server" +
                               (root.dbConfiguredHost !== "" ? " (" + root.dbConfiguredHost + ")" : "") +
                               " - working on this computer's own copy. Your changes will NOT be seen by anyone else."
-                        font.pixelSize: 12; color: "#c0392b"; font.bold: true
+                        font.pixelSize: 12; color: Theme.dangerStrong; font.bold: true
                         Layout.fillWidth: true; elide: Text.ElideRight
                     }
                     Label {
@@ -6308,12 +4721,12 @@ ApplicationWindow {
                     ToolTip.visible: hovered
                     ToolTip.text: "Try the shared server again"
                     onClicked: retryDatabaseConnection()
-                    contentItem: Text { text: "Retry"; color: "#c0392b"; font.bold: true; font.pixelSize: 12; horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter }
+                    contentItem: Text { text: "Retry"; color: Theme.dangerStrong; font.bold: true; font.pixelSize: 12; horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter }
                 }
                 Button {
                     text: "Settings"
                     onClicked: cloudSettingsDialog.open()
-                    contentItem: Text { text: "Settings"; color: "#c0392b"; font.pixelSize: 12; horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter }
+                    contentItem: Text { text: "Settings"; color: Theme.dangerStrong; font.pixelSize: 12; horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter }
                 }
             }
         }
@@ -6321,16 +4734,16 @@ ApplicationWindow {
         // Low stock warning
         Rectangle {
             Layout.fillWidth: true; Layout.preferredHeight: 35
-            color: "#fde8e8"; border.color: "#e74c3c"; border.width: 1
-            visible: excelHandler.lowStockCount > 0
+            color: "#fde8e8"; border.color: Theme.danger; border.width: 1
+            visible: Backend.lowStockCount > 0
 
             RowLayout {
                 anchors.fill: parent; anchors.margins: 8; spacing: 10
-                Label { text: excelHandler.lowStockCount + " item(s) below reorder level!"; font.pixelSize: 13; color: "#c0392b"; font.bold: true; Layout.fillWidth: true }
+                Label { text: Backend.lowStockCount + " item(s) below reorder level!"; font.pixelSize: 13; color: Theme.dangerStrong; font.bold: true; Layout.fillWidth: true }
                 Button {
                     text: "View"; flat: true
                     onClicked: lowStockDialog.open()
-                    contentItem: Text { text: "View Details"; color: "#e74c3c"; font.bold: true; font.pixelSize: 12 }
+                    contentItem: Text { text: "View Details"; color: Theme.danger; font.bold: true; font.pixelSize: 12 }
                 }
             }
         }
@@ -6346,8 +4759,8 @@ ApplicationWindow {
                 Repeater {
                     model: [
                         { label: "Parts tracked", value: (root.stockTotalsData.parts || 0).toString() },
-                        { label: "Units in stock", value: groupIndianDigits(root.stockTotalsData.units || 0).replace(".00", "") },
-                        { label: "Stock value", value: formatRupees(root.stockTotalsData.value || 0) },
+                        { label: "Units in stock", value: Format.grouped(root.stockTotalsData.units || 0).replace(".00", "") },
+                        { label: "Stock value", value: Format.rupees(root.stockTotalsData.value || 0) },
                         { label: "Departments", value: (root.stockTotalsData.departments || 0).toString() }
                     ]
                     ColumnLayout {
@@ -6427,7 +4840,7 @@ ApplicationWindow {
                                 font.pixelSize: 11; color: "#8a9199"
                             }
                             Label {
-                                text: groupIndianDigits(root.stockTotalsData.units || 0).replace(".00", "")
+                                text: Format.grouped(root.stockTotalsData.units || 0).replace(".00", "")
                                 font.pixelSize: 12; font.bold: true; color: "#1f2933"
                                 Layout.preferredWidth: 70; horizontalAlignment: Text.AlignRight
                             }
@@ -6477,7 +4890,7 @@ ApplicationWindow {
                                         font.pixelSize: 11; color: "#8a9199"
                                     }
                                     Label {
-                                        text: groupIndianDigits(modelData.qty).replace(".00", "")
+                                        text: Format.grouped(modelData.qty).replace(".00", "")
                                         font.pixelSize: 12; font.bold: true; color: "#1f2933"
                                         Layout.preferredWidth: 70; horizontalAlignment: Text.AlignRight
                                     }
@@ -6634,8 +5047,8 @@ ApplicationWindow {
                                 horizontalAlignment: Text.AlignHCenter
                                 text: {
                                     var h = donutCanvas.hovered
-                                    if (h >= 0) return groupIndianDigits(donutCanvas.slices[h].qty).replace(".00", "")
-                                    return groupIndianDigits(root.stockTotalsData.units || 0).replace(".00", "")
+                                    if (h >= 0) return Format.grouped(donutCanvas.slices[h].qty).replace(".00", "")
+                                    return Format.grouped(root.stockTotalsData.units || 0).replace(".00", "")
                                 }
                                 font.pixelSize: 20; font.bold: true; color: "#1f2933"
                                 elide: Text.ElideRight
@@ -6661,13 +5074,13 @@ ApplicationWindow {
         // Column Headers (9 columns)
         Rectangle {
             id: tableHeader
-            Layout.fillWidth: true; Layout.preferredHeight: 35; color: "#2c3e50"
+            Layout.fillWidth: true; Layout.preferredHeight: 35; color: Theme.textPrimary
 
             Row {
                 anchors.fill: parent; spacing: 0
 
                 Rectangle {
-                    width: 40; height: 35; color: "#2c3e50"; border.color: "#1a252f"
+                    width: 40; height: 35; color: Theme.textPrimary; border.color: "#1a252f"
                     Text { anchors.centerIn: parent; text: "#"; color: "white"; font.bold: true; font.pixelSize: 11 }
                 }
 
@@ -6676,7 +5089,7 @@ ApplicationWindow {
 
                     Rectangle {
                         width: root.columnWidth(index)
-                        height: 35; color: "#34495e"; border.color: "#2c3e50"
+                        height: 35; color: "#34495e"; border.color: Theme.textPrimary
 
                         Text {
                             anchors.centerIn: parent
@@ -6722,8 +5135,8 @@ ApplicationWindow {
 
                     Rectangle {
                         width: 40; height: 32
-                        color: root.selectedRow === r ? "#27ae60" : "#95a5a6"
-                        border.color: "#7f8c8d"
+                        color: root.selectedRow === r ? Theme.success : Theme.textMuted
+                        border.color: Theme.textSecondary
                         Text { anchors.centerIn: parent; text: r; color: root.selectedRow === r ? "white" : "#2c3e50"; font.bold: root.selectedRow === r; font.pixelSize: 11 }
                         MouseArea {
                             anchors.fill: parent
@@ -6768,10 +5181,10 @@ ApplicationWindow {
                                 elide: Text.ElideRight
                                 text: {
                                     var _refresh = root.tableRefreshToken
-                                    var v = excelHandler.model.getData(r, c)
+                                    var v = Backend.model.getData(r, c)
                                     return v === null || v === undefined ? "" : v.toString()
                                 }
-                                color: "#2c3e50"
+                                color: Theme.textPrimary
                                 font.pixelSize: 12
                             }
 
@@ -6810,8 +5223,8 @@ ApplicationWindow {
             text: "Delete Row"
             enabled: loginDialog.isAuthenticated && root.contextRow > 0
             onTriggered: {
-                if (excelHandler.model.removeRowAt(root.contextRow)) {
-                    rows = excelHandler.model.rowCount()
+                if (Backend.model.removeRowAt(root.contextRow)) {
+                    rows = Backend.model.rowCount()
                     if (root.selectedRow === root.contextRow) root.selectedRow = -1
                 }
             }
@@ -6819,29 +5232,29 @@ ApplicationWindow {
     }
 
     footer: ToolBar {
-        background: Rectangle { color: "#ecf0f1"; border.color: "#bdc3c7" }
+        background: Rectangle { color: "#ecf0f1"; border.color: Theme.divider }
 
         RowLayout {
             anchors.fill: parent; anchors.margins: 5; spacing: 15
 
-            Label { id: statusLabel; text: "Ready"; font.pixelSize: 12; color: "#2c3e50" }
+            Label { id: statusLabel; text: "Ready"; font.pixelSize: 12; color: Theme.textPrimary }
             Timer { id: statusTimer; interval: 5000; onTriggered: statusLabel.text = "Ready" }
 
-            Rectangle { width: 1; height: 20; color: "#bdc3c7" }
+            Rectangle { width: 1; height: 20; color: Theme.divider }
             Label { text: "Rows: " + rows; font.bold: true; color: "#34495e" }
 
-            Rectangle { width: 1; height: 20; color: "#bdc3c7" }
-            Label { text: "Vendors: " + excelHandler.totalVendors; color: "#1abc9c"; font.bold: true }
+            Rectangle { width: 1; height: 20; color: Theme.divider }
+            Label { text: "Vendors: " + Backend.totalVendors; color: "#1abc9c"; font.bold: true }
 
-            Rectangle { width: 1; height: 20; color: "#bdc3c7" }
-            Label { text: "Pending POs: " + excelHandler.pendingPOCount; color: excelHandler.pendingPOCount > 0 ? "#e67e22" : "#27ae60"; font.bold: true }
+            Rectangle { width: 1; height: 20; color: Theme.divider }
+            Label { text: "Pending POs: " + Backend.pendingPOCount; color: Backend.pendingPOCount > 0 ? Theme.warning : "#27ae60"; font.bold: true }
 
             Item { Layout.fillWidth: true }
 
             Label {
-                text: excelHandler.permanentFile !== "" ? excelHandler.getFileName() : "No permanent file"
-                color: excelHandler.permanentFile !== "" ? "#27ae60" : "#e67e22"
-                font.bold: excelHandler.permanentFile !== ""
+                text: Backend.permanentFile !== "" ? Backend.getFileName() : "No permanent file"
+                color: Backend.permanentFile !== "" ? "#27ae60" : Theme.warning
+                font.bold: Backend.permanentFile !== ""
             }
         }
     }
@@ -6858,13 +5271,13 @@ ApplicationWindow {
         console.log("Enstein Stock Manager + Supply Chain Init")
 
         // Stock is loaded from the shared database by the backend at startup.
-        rows = excelHandler.model.rowCount()
-        columns = excelHandler.model.columnCount()
+        rows = Backend.model.rowCount()
+        columns = Backend.model.columnCount()
         root.fileType = "stock"
         refreshDbConnectionState()
         statusLabel.text = root.dbUsingLocalFallback
                 ? "Working on this computer's local copy - the shared server did not answer"
-                : (excelHandler.isDatabaseConnected()
+                : (Backend.isDatabaseConnected()
                    ? "Ready - stock loaded from database"
                    : "Warning: database not connected")
 

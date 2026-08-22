@@ -5,6 +5,11 @@
 
 A professional inventory management application built with Qt6 and QML.
 
+**New to the codebase?** Start with
+**[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)** — it explains how the project
+is put together and why. Then read the guide for the half you work on:
+[backend](docs/BACKEND_GUIDE.md) or [frontend](docs/FRONTEND_GUIDE.md).
+
 ## Features
 
 - **Excel File Support**: Create, open, edit, and save `.xlsx` files
@@ -15,18 +20,39 @@ A professional inventory management application built with Qt6 and QML.
 - **User Authentication**: Role-based access control (owner, editor, viewer)
 - **Cross-Platform**: Works on Linux, Windows, and macOS
 
-## Project Structure
+## Project structure
+
+The project is two halves that are built separately and meet only at the
+executable. Neither includes the other's code; they meet at runtime through one
+object the C++ side publishes to QML as `Backend`.
 
 ```
-enstein_stock_manager/
-├── CMakeLists.txt      # Build configuration
-├── main.cpp            # Application entry point
-├── excelhandler.h      # Header for Excel operations
-├── excelhandler.cpp    # Implementation of Excel operations
-├── Main.qml            # Main user interface
-├── QXlsx/              # Excel library (git submodule)
-└── README.md           # This file
+Enstein_Stock_Manager/
+├── CMakeLists.txt              ties the two halves into the executable
+│
+├── src/                        C++ backend  (library: EnsteinCore)
+│   ├── app/main.cpp            entry point; registers Backend, loads Main.qml
+│   ├── core/                   database, schema, migrations, settings, counters
+│   ├── models/                 the stock grid model
+│   ├── domain/                 one service per area of the business
+│   ├── documents/              purchase order and challan → PDF
+│   └── bridge/                 ExcelHandler: the QML-facing contract
+│
+├── qml/                        QML frontend  (module: EnsteinUi)
+│   ├── Main.qml                the window: toolbar, stock grid, footer
+│   ├── theme/                  Theme singleton — colours and spacing
+│   ├── util/                   Format and App singletons
+│   ├── components/             reusable controls
+│   └── dialogs/                grouped by area: vendor, item, po, pr, dc, …
+│
+├── docs/                       architecture and guides — start here
+├── assets/                     icons
+├── packaging/                  Windows installer and portable build
+└── third_party/QXlsx/          vendored .xlsx library
 ```
+
+See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for what lives where and why,
+and [CONTRIBUTING.md](CONTRIBUTING.md) for who owns which directory.
 
 ## Prerequisites
 
@@ -57,34 +83,23 @@ brew install qt@6 cmake
 
 ## Build Instructions
 
-### 1. Clone QXlsx Library
+QXlsx is vendored under `third_party/`, so there is nothing to clone.
+
 ```bash
-cd enstein_stock_manager
-git clone https://github.com/QtExcel/QXlsx.git
+# Configure  (on Windows/macOS add -DCMAKE_PREFIX_PATH=/path/to/Qt/6.x.x/gcc_64)
+cmake -S . -B build
+
+# Build
+cmake --build build -j$(nproc)
+
+# Run
+./build/EnsteinStockManager
 ```
 
-### 2. Create Build Directory
-```bash
-mkdir build && cd build
-```
+Frontend work can also be linted:
 
-### 3. Configure with CMake
 ```bash
-# Linux
-cmake ..
-
-# Windows/macOS (specify Qt path)
-cmake .. -DCMAKE_PREFIX_PATH=/path/to/Qt/6.x.x/gcc_64
-```
-
-### 4. Build
-```bash
-cmake --build . -j$(nproc)
-```
-
-### 5. Run
-```bash
-./EnsteinStockManager
+cmake --build build --target all_qmllint
 ```
 
 ## Usage
@@ -121,31 +136,18 @@ cmake --build . -j$(nproc)
 | Approved | Person who approved the entry |
 | Vendor | Supplier name |
 
-## API Reference
+## API reference
 
-### ExcelHandler Class
+The frontend talks to the backend through one object, `Backend`, and everything
+it may call is listed in
+**[docs/QML_API_REFERENCE.md](docs/QML_API_REFERENCE.md)**.
 
-#### Properties
-| Property | Type | Description |
-|----------|------|-------------|
-| `model` | ExcelTableModel* | Data model for table views |
-| `currentFile` | QString | Path to current file |
-| `hasUnsavedChanges` | bool | Unsaved changes flag |
-| `permanentFile` | QString | Permanent database file |
-| `cloudFolder` | QString | Cloud sync folder |
-| `currentUser` | QString | Current user name |
-| `userRole` | QString | User role (owner/editor/viewer) |
+```qml
+import ExcelHandler 1.0
 
-#### Key Methods
-| Method | Description |
-|--------|-------------|
-| `createStockFile(rows)` | Create new stock file |
-| `loadExcel(path)` | Load Excel file |
-| `saveExcel(path)` | Save to Excel file |
-| `searchAllMatches(text)` | Search parts |
-| `addNewItem(...)` | Add or update item |
-| `syncToCloud()` | Upload to cloud |
-| `syncFromCloud()` | Download from cloud |
+var vendors = Backend.getVendorList()
+Backend.addItemMasterDetails({ partName: "Bearing", partNo: "BR-01" })
+```
 
 ## Downloads
 
@@ -189,6 +191,19 @@ unset GTK_PATH
 ```bash
 cmake .. -DCMAKE_PREFIX_PATH=/path/to/Qt/6.x.x/gcc_64
 ```
+
+## Documentation
+
+| Document | What it covers |
+|---|---|
+| [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | How the project is put together, and why — **read first** |
+| [docs/BACKEND_GUIDE.md](docs/BACKEND_GUIDE.md) | Working in `src/`: recipes, pitfalls, conventions |
+| [docs/FRONTEND_GUIDE.md](docs/FRONTEND_GUIDE.md) | Working in `qml/`: singletons, extracting a dialog |
+| [docs/QML_API_REFERENCE.md](docs/QML_API_REFERENCE.md) | Everything QML may call on the backend |
+| [docs/DATABASE_SCHEMA.md](docs/DATABASE_SCHEMA.md) | Tables, columns and migrations |
+| [CONTRIBUTING.md](CONTRIBUTING.md) | Who owns what, and how the two halves stay in step |
+| [docs/MULTI_COMPUTER_SETUP.md](docs/MULTI_COMPUTER_SETUP.md) | Running against a shared server |
+| [docs/RELEASING.md](docs/RELEASING.md) | Cutting a release |
 
 ## License
 

@@ -1,5 +1,5 @@
-#include "dcdocument.h"
-#include "docrender.h"
+#include "documents/dcdocument.h"
+#include "documents/docrender.h"
 
 #include <QLocale>
 
