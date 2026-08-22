@@ -60,6 +60,8 @@ const QVector<DbField> kItemFields = {
     {"stock_qty",    "stockQty",    'i'},
     {"hsn_code",     "hsnCode",     's'},
     {"unit",         "unit",        's'},
+    {"item_type",    "itemType",    's'},
+    {"sac_code",     "sacCode",     's'},
 };
 
 const QVector<DbField> kPoFields = {
@@ -662,11 +664,51 @@ QVariantMap ExcelHandler::getVendorByName(const QString &name)
 
 // ===================== ITEM MASTER MANAGEMENT ======================
 
+// An item is either a tangible good, numbered with an HSN code, or an
+// intangible service, numbered with a SAC code.
+static const QLatin1String kTangible("Tangible");
+static const QLatin1String kIntangible("Intangible");
+
+static bool isIntangibleItem(const QVariantMap &item)
+{
+    return item.value("itemType").toString().trimmed()
+               .compare(kIntangible, Qt::CaseInsensitive) == 0;
+}
+
+// Forces a row into one of the two classifications. Rows written before the
+// split have no type at all; every item back then was a good, so they come
+// back as tangible rather than as some third empty state the UI can't show.
+static void normalizeItemClassification(QVariantMap &item)
+{
+    item["itemType"] = isIntangibleItem(item) ? QString(kIntangible) : QString(kTangible);
+    // The code that does not apply is kept, not cleared, so reclassifying an
+    // item and changing your mind does not cost you the number you typed.
+    if (!item.contains("hsnCode")) item["hsnCode"] = QString();
+    if (!item.contains("sacCode")) item["sacCode"] = QString();
+}
+
+// The single number a printed document shows for this item. Challans and
+// exports have one "HSN/SAC" column, so they ask here instead of each
+// re-deciding the goods/services rule.
+static QString itemTaxCode(const QVariantMap &item)
+{
+    const bool intangible = isIntangibleItem(item);
+    const QString hsn = item.value("hsnCode").toString().trimmed();
+    const QString sac = item.value("sacCode").toString().trimmed();
+    const QString primary = intangible ? sac : hsn;
+    if (!primary.isEmpty()) return primary;
+    // An item classified one way but numbered the other still prints its
+    // number rather than a blank cell.
+    return intangible ? hsn : sac;
+}
+
 void ExcelHandler::loadItemMaster()
 {
     m_itemMaster.clear();
     if (!m_db) return;
     m_itemMaster = dbRowsToApp(kItemFields, m_db->selectAll("item_master", "part_no"));
+    for (QVariantMap &item : m_itemMaster)
+        normalizeItemClassification(item);
     qDebug() << "Loaded" << m_itemMaster.size() << "items in Item Master";
 }
 
@@ -691,6 +733,7 @@ bool ExcelHandler::addItemMasterDetails(QVariantMap itemDetails)
         }
     }
 
+    normalizeItemClassification(itemDetails);
     m_itemMaster.append(itemDetails);
     saveItemMaster();
     emit itemMasterListChanged();
@@ -754,6 +797,8 @@ bool ExcelHandler::updateItemMasterDetails(QVariantMap itemDetails)
     QString unit = itemDetails.value("unit", updated.value("unit")).toString();
 
     updated["hsnCode"] = hsnCode;
+    updated["sacCode"] = itemDetails.value("sacCode", updated.value("sacCode")).toString();
+    updated["itemType"] = itemDetails.value("itemType", updated.value("itemType")).toString();
     updated["unit"] = unit;
     updated["partNo"] = newPartNo;
     updated["partName"] = partName;
@@ -765,6 +810,8 @@ bool ExcelHandler::updateItemMasterDetails(QVariantMap itemDetails)
     // Keep legacy columns in sync for persistence.
     updated["category"] = itemDetails.value("category", department.isEmpty() ? updated.value("category") : department);
     updated["stockQty"] = itemDetails.contains("stockQty") ? itemDetails.value("stockQty").toInt() : requiredQty;
+
+    normalizeItemClassification(updated);
 
     QVariantMap previous = m_itemMaster[index];
     m_itemMaster[index] = updated;
@@ -779,7 +826,11 @@ QVariantList ExcelHandler::getItemMasterList()
 {
     QVariantList list;
     for (const auto &item : m_itemMaster) {
-        list.append(item);
+        QVariantMap row = item;
+        // Resolved here so every screen shows the same number without each
+        // one repeating the goods/services rule.
+        row["taxCode"] = itemTaxCode(item);
+        list.append(row);
     }
     return list;
 }
@@ -1536,7 +1587,7 @@ static bool resolveDCLines(const QVariantList &items,
             if (line["partNo"].toString().trimmed().isEmpty())
                 line["partNo"] = item["partNo"].toString().trimmed();
             if (line["hsnCode"].toString().trimmed().isEmpty())
-                line["hsnCode"] = item["hsnCode"].toString().trimmed();
+                line["hsnCode"] = itemTaxCode(item);
             if (line["unit"].toString().trimmed().isEmpty())
                 line["unit"] = item["unit"].toString().trimmed();
             break;

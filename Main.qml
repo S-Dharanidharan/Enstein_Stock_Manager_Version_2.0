@@ -442,7 +442,7 @@ ApplicationWindow {
             TextField { id: partNameField; Layout.fillWidth: true; placeholderText: "e.g., Microcontroller"; selectByMouse: true }
 
             Label { text: "Department:" }
-            ComboBox { id: categoryField; Layout.fillWidth: true; editable: true; model: ["Electronics", "Mechanical", "Hardware", "Software", "Other"] }
+            ComboBox { id: categoryField; Layout.fillWidth: true; editable: true; model: ["Electronics", "Mechanical","Electrical","SCM", "Software", "Other"] }
 
             Label { text: "Stock Quantity:" }
             SpinBox { id: quantityField; Layout.fillWidth: true; from: 1; to: 10000; value: 1; editable: true }
@@ -479,7 +479,11 @@ ApplicationWindow {
         title: "Vendor Management"
         modal: true
         anchors.centerIn: parent
-        width: 700; height: 600
+        // Takes most of the window instead of a fixed 700x600. The vendor list
+        // is what people scan and search, so it gets every pixel the entry form
+        // above does not need.
+        width: Math.min(root.width - 80, 1240)
+        height: Math.min(root.height - 80, 860)
 
         ColumnLayout {
             anchors.fill: parent; spacing: 10
@@ -488,32 +492,41 @@ ApplicationWindow {
 
             // Add Vendor Form
             Rectangle {
-                Layout.fillWidth: true; Layout.preferredHeight: 250   //180
+                Layout.fillWidth: true
+                // Height follows the form rather than a fixed 250, which the
+                // thirteen fields had already outgrown - the last row and the
+                // Add button were being cut off at the bottom edge.
+                Layout.preferredHeight: vendorEntryGrid.implicitHeight + 20
                 color: "#f8f9fa"; border.color: "#dee2e6"; radius: 5
 
                 GridLayout {
+                    id: vendorEntryGrid
                     anchors.fill: parent; anchors.margins: 10
-                    columns: 4; rowSpacing: 8; columnSpacing: 10
+                    // Three label/field pairs per row when there is width for
+                    // them, two when the window is narrow.
+                    columns: width > 900 ? 6 : 4
+                    rowSpacing: 8; columnSpacing: 10
 
-                    Label { text: "Name:" } TextField { id: vendorNameField; Layout.fillWidth: true; placeholderText: "Vendor name" }
-                    Label { text: "Address:" } TextField { id: vendorAddressField; Layout.fillWidth: true; placeholderText: "Address" }
-                    Label { text: "Name of Bank & Branch:" } TextField { id: vendorBankBranchField; Layout.fillWidth: true; placeholderText: "Bank and branch name" }
-                    Label { text: "IFSC Code:" } TextField { id: vendorIfscField; Layout.fillWidth: true; placeholderText: "IFSC code" }
-                    Label { text: "Bank Account Number:" } TextField { id: vendorAccountField; Layout.fillWidth: true; placeholderText: "Account number" }
-                    Label { text: "CIN Number" } TextField { id: vendorCinField; Layout.fillWidth: true; placeholderText: "CIN number" }
-                    Label { text: "GSTIN Number:" } TextField { id: vendorGstinField; Layout.fillWidth: true; placeholderText: "GSTIN number" }
-                    Label { text: "PAN Number:" } TextField { id: vendorPANField; Layout.fillWidth: true; placeholderText: "PAN number" }
-                    Label { text: "Name in PAN Card:" } TextField { id: vendorPanNameField; Layout.fillWidth: true; placeholderText: "Name as per PAN card" }
-                    Label { text: "Contact Person:" } TextField { id: vendorContactPersonField; Layout.fillWidth: true; placeholderText: "Contact person name" }
-                    Label { text: "Email:" } TextField { id: vendorEmailField; Layout.fillWidth: true; placeholderText: "Email" }
-                    Label { text: "Phone No:" } TextField { id: vendorPhoneNumberField; Layout.fillWidth: true; placeholderText: "Phone number" }
-                    Label { text: "Item Category:" } TextField { id: vendorItemCategoryField; Layout.fillWidth: true; placeholderText: "Categories supplied" }
+                    Label { text: "Name:" } TextField { id: vendorNameField; Layout.fillWidth: true; Layout.preferredWidth: 150; placeholderText: "Vendor name" }
+                    Label { text: "Address:" } TextField { id: vendorAddressField; Layout.fillWidth: true; Layout.preferredWidth: 150; placeholderText: "Address" }
+                    Label { text: "Name of Bank & Branch:" } TextField { id: vendorBankBranchField; Layout.fillWidth: true; Layout.preferredWidth: 150; placeholderText: "Bank and branch name" }
+                    Label { text: "IFSC Code:" } TextField { id: vendorIfscField; Layout.fillWidth: true; Layout.preferredWidth: 150; placeholderText: "IFSC code" }
+                    Label { text: "Bank Account Number:" } TextField { id: vendorAccountField; Layout.fillWidth: true; Layout.preferredWidth: 150; placeholderText: "Account number" }
+                    Label { text: "CIN Number" } TextField { id: vendorCinField; Layout.fillWidth: true; Layout.preferredWidth: 150; placeholderText: "CIN number" }
+                    Label { text: "GSTIN Number:" } TextField { id: vendorGstinField; Layout.fillWidth: true; Layout.preferredWidth: 150; placeholderText: "GSTIN number" }
+                    Label { text: "PAN Number:" } TextField { id: vendorPANField; Layout.fillWidth: true; Layout.preferredWidth: 150; placeholderText: "PAN number" }
+                    Label { text: "Name in PAN Card:" } TextField { id: vendorPanNameField; Layout.fillWidth: true; Layout.preferredWidth: 150; placeholderText: "Name as per PAN card" }
+                    Label { text: "Contact Person:" } TextField { id: vendorContactPersonField; Layout.fillWidth: true; Layout.preferredWidth: 150; placeholderText: "Contact person name" }
+                    Label { text: "Email:" } TextField { id: vendorEmailField; Layout.fillWidth: true; Layout.preferredWidth: 150; placeholderText: "Email" }
+                    Label { text: "Phone No:" } TextField { id: vendorPhoneNumberField; Layout.fillWidth: true; Layout.preferredWidth: 150; placeholderText: "Phone number" }
+                    Label { text: "Item Category:" } TextField { id: vendorItemCategoryField; Layout.fillWidth: true; Layout.preferredWidth: 150; placeholderText: "Categories supplied" }
 
-                    Item {} // spacer
-                    
+                    // Spans the whole row so the button sits at the right edge
+                    // whether the grid is showing two pairs or three.
                     Button {
                         text: "Add Vendor"; highlighted: true
-                        
+                        Layout.columnSpan: vendorEntryGrid.columns
+                        Layout.alignment: Qt.AlignRight
                         onClicked: {
 
                             console.log("Adding vendor with details:", {
@@ -603,8 +616,15 @@ ApplicationWindow {
                                 ColumnLayout {
                                     anchors.fill: parent
                                     spacing: 2
-                                    Label { text: model.name; font.bold: true; font.pixelSize: 13 }
-                                    Label { text: model.phone + "  |  " + model.email + "  |  " + model.bankBranch; font.pixelSize: 11; color: "#7f8c8d" }
+                                    Label {
+                                        text: model.name; font.bold: true; font.pixelSize: 13
+                                        Layout.fillWidth: true; elide: Text.ElideRight
+                                    }
+                                    Label {
+                                        text: model.phone + "  |  " + model.email + "  |  " + model.bankBranch
+                                        font.pixelSize: 11; color: "#7f8c8d"
+                                        Layout.fillWidth: true; elide: Text.ElideRight
+                                    }
                                 }
 
                                 MouseArea {
@@ -666,31 +686,43 @@ ApplicationWindow {
         modal: true
         anchors.centerIn: parent
         standardButtons: Dialog.Ok | Dialog.Cancel
-        width: 700
+        // Wide enough for three field pairs per row, and never taller than
+        // the window: the fields scroll inside rather than pushing the OK
+        // and Cancel buttons off the bottom edge.
+        width: Math.min(root.width - 120, 1100)
+        height: Math.min(root.height - 120, 540)
 
         ColumnLayout {
-            spacing: 10; width: parent.width
+            anchors.fill: parent
+            spacing: 10
             Label { text: "Edit Vendor Details"; font.bold: true; font.pixelSize: 14 }
             Rectangle { Layout.fillWidth: true; height: 1; color: "#ccc" }
 
-            GridLayout {
-                Layout.fillWidth: true
-                Layout.margins: 10
-                columns: 4; rowSpacing: 8; columnSpacing: 10
+            ScrollView {
+                id: editVendorScroll
+                Layout.fillWidth: true; Layout.fillHeight: true
+                clip: true
+                contentWidth: availableWidth
 
-                Label { text: "Name:" } TextField { id: editVendorNameField; Layout.fillWidth: true; placeholderText: "Vendor name" }
-                Label { text: "Address:" } TextField { id: editVendorAddressField; Layout.fillWidth: true; placeholderText: "Address" }
-                Label { text: "Name of Bank & Branch:" } TextField { id: editVendorBankBranchField; Layout.fillWidth: true; placeholderText: "Bank and branch name" }
-                Label { text: "IFSC Code:" } TextField { id: editVendorIfscField; Layout.fillWidth: true; placeholderText: "IFSC code" }
-                Label { text: "Bank Account Number:" } TextField { id: editVendorAccountField; Layout.fillWidth: true; placeholderText: "Account number" }
-                Label { text: "CIN Number" } TextField { id: editVendorCinField; Layout.fillWidth: true; placeholderText: "CIN number" }
-                Label { text: "GSTIN Number:" } TextField { id: editVendorGstinField; Layout.fillWidth: true; placeholderText: "GSTIN number" }
-                Label { text: "PAN Number:" } TextField { id: editVendorPANField; Layout.fillWidth: true; placeholderText: "PAN number" }
-                Label { text: "Name in PAN Card:" } TextField { id: editVendorPanNameField; Layout.fillWidth: true; placeholderText: "Name as per PAN card" }
-                Label { text: "Contact Person:" } TextField { id: editVendorContactPersonField; Layout.fillWidth: true; placeholderText: "Contact person name" }
-                Label { text: "Email:" } TextField { id: editVendorEmailField; Layout.fillWidth: true; placeholderText: "Email" }
-                Label { text: "Phone No:" } TextField { id: editVendorPhoneNumberField; Layout.fillWidth: true; placeholderText: "Phone number" }
-                Label { text: "Item Category:" } TextField { id: editVendorItemCategoryField; Layout.fillWidth: true; placeholderText: "Categories supplied" }
+                GridLayout {
+                    width: editVendorScroll.availableWidth
+                    columns: width > 900 ? 6 : 4
+                    rowSpacing: 8; columnSpacing: 10
+
+                    Label { text: "Name:" } TextField { id: editVendorNameField; Layout.fillWidth: true; Layout.preferredWidth: 150; placeholderText: "Vendor name" }
+                    Label { text: "Address:" } TextField { id: editVendorAddressField; Layout.fillWidth: true; Layout.preferredWidth: 150; placeholderText: "Address" }
+                    Label { text: "Name of Bank & Branch:" } TextField { id: editVendorBankBranchField; Layout.fillWidth: true; Layout.preferredWidth: 150; placeholderText: "Bank and branch name" }
+                    Label { text: "IFSC Code:" } TextField { id: editVendorIfscField; Layout.fillWidth: true; Layout.preferredWidth: 150; placeholderText: "IFSC code" }
+                    Label { text: "Bank Account Number:" } TextField { id: editVendorAccountField; Layout.fillWidth: true; Layout.preferredWidth: 150; placeholderText: "Account number" }
+                    Label { text: "CIN Number" } TextField { id: editVendorCinField; Layout.fillWidth: true; Layout.preferredWidth: 150; placeholderText: "CIN number" }
+                    Label { text: "GSTIN Number:" } TextField { id: editVendorGstinField; Layout.fillWidth: true; Layout.preferredWidth: 150; placeholderText: "GSTIN number" }
+                    Label { text: "PAN Number:" } TextField { id: editVendorPANField; Layout.fillWidth: true; Layout.preferredWidth: 150; placeholderText: "PAN number" }
+                    Label { text: "Name in PAN Card:" } TextField { id: editVendorPanNameField; Layout.fillWidth: true; Layout.preferredWidth: 150; placeholderText: "Name as per PAN card" }
+                    Label { text: "Contact Person:" } TextField { id: editVendorContactPersonField; Layout.fillWidth: true; Layout.preferredWidth: 150; placeholderText: "Contact person name" }
+                    Label { text: "Email:" } TextField { id: editVendorEmailField; Layout.fillWidth: true; Layout.preferredWidth: 150; placeholderText: "Email" }
+                    Label { text: "Phone No:" } TextField { id: editVendorPhoneNumberField; Layout.fillWidth: true; Layout.preferredWidth: 150; placeholderText: "Phone number" }
+                    Label { text: "Item Category:" } TextField { id: editVendorItemCategoryField; Layout.fillWidth: true; Layout.preferredWidth: 150; placeholderText: "Categories supplied" }
+                }
             }
         }
 
@@ -967,7 +999,13 @@ ApplicationWindow {
         editItemRequiredQtyField.value = item.requiredQty || 0
         editItemVendorField.editText = item.vendor || ""
         editItemVendorField.currentIndex = -1
+        // Setting the losing radio too: leaving it checked from the previous
+        // item would show two selected buttons in the same group.
+        var intangible = (item.itemType || "") === "Intangible"
+        editItemIntangibleRadio.checked = intangible
+        editItemTangibleRadio.checked = !intangible
         editItemHsnField.text = item.hsnCode || ""
+        editItemSacField.text = item.sacCode || ""
         editItemUnitField.text = item.unit || ""
         itemDetailsDialog.open()
     }
@@ -979,38 +1017,51 @@ ApplicationWindow {
         title: "Item Master Management"
         modal: true
         anchors.centerIn: parent
-        width: 750; height: 650
+        // Takes most of the window instead of a fixed 750x650, so the item list
+        // below shows many more rows at once and the wider entry form fits its
+        // fields three pairs to a row.
+        width: Math.min(root.width - 80, 1240)
+        height: Math.min(root.height - 80, 860)
 
         ColumnLayout{
             anchors.fill: parent; spacing: 10
 
             Label { text: "Item Master"; font.bold: true; font.pixelSize: 16; color: "#2c3e50"}
 
-            Rectangle {  
-                Layout.fillWidth: true; Layout.preferredHeight: 245
-                color: "#f0f8ff"; border.color: "#3498db"; radius: 5 
+            Rectangle {
+                Layout.fillWidth: true
+                // Height follows the form rather than a fixed 245, so the
+                // classification row added below cannot push the Add button
+                // past the bottom edge.
+                Layout.preferredHeight: itemEntryGrid.implicitHeight + 20
+                color: "#f0f8ff"; border.color: "#3498db"; radius: 5
 
                 GridLayout {
+                    id: itemEntryGrid
                     anchors.fill: parent; anchors.margins: 10
-                    columns: 4; rowSpacing: 8; columnSpacing: 10
+                    // Three label/field pairs per row when there is width for
+                    // them, two when the window is narrow.
+                    columns: width > 900 ? 6 : 4
+                    rowSpacing: 8; columnSpacing: 10
 
-                    Label { text: "Part Name:" } TextField { id: itemPartNameField; Layout.fillWidth: true; placeholderText: "Part name" }
-                    Label { text: "Part No:" } TextField { id: itemPartNoField; Layout.fillWidth: true; placeholderText: "Part number" }
-                    Label { text: "Department:" } TextField { id: itemDepartmentField; Layout.fillWidth: true; placeholderText: "Department" }
+                    Label { text: "Part Name:" } TextField { id: itemPartNameField; Layout.fillWidth: true; Layout.preferredWidth: 150; placeholderText: "Part name" }
+                    Label { text: "Part No:" } TextField { id: itemPartNoField; Layout.fillWidth: true; Layout.preferredWidth: 150; placeholderText: "Part number" }
+                    Label { text: "Department:" } TextField { id: itemDepartmentField; Layout.fillWidth: true; Layout.preferredWidth: 150; placeholderText: "Department" }
                     Label { text: "Unit Price:" }
                     TextField {
                         id: itemUnitPriceField
                         Layout.fillWidth: true
+                        Layout.preferredWidth: 150
                         placeholderText: "0.00"
                         text: "0.00"
                         validator: DoubleValidator { bottom: 0; decimals: 2 }
                         inputMethodHints: Qt.ImhFormattedNumbersOnly
                         selectByMouse: true
                     }
-                    Label { text: "Required Quantity:" } SpinBox { id: itemRequiredQtyField; from: 0; to: 100000; value: 0; editable: true }
+                    Label { text: "Required Quantity:" } SpinBox { id: itemRequiredQtyField; Layout.fillWidth: true; Layout.preferredWidth: 150; from: 0; to: 100000; value: 0; editable: true }
                     Label { text: "Vendor Preferred:" }
                     RowLayout {
-                        Layout.fillWidth: true; spacing: 6
+                        Layout.fillWidth: true; Layout.preferredWidth: 150; spacing: 6
                         ComboBox { id: itemVendorField; Layout.fillWidth: true; editable: true; model: excelHandler.getVendorNames() }
                         Button {
                             text: "\u{1F50D}"
@@ -1021,14 +1072,48 @@ ApplicationWindow {
                         }
                     }
 
-                    // Both are printed on a delivery challan, so keeping them on
-                    // the item saves retyping them for every delivery.
-                    Label { text: "HSN/SAC Code:" } TextField { id: itemHsnField; Layout.fillWidth: true; placeholderText: "e.g. 85015210"; selectByMouse: true }
-                    Label { text: "Unit:" } TextField { id: itemUnitField; Layout.fillWidth: true; placeholderText: "Nos, Kg, Mtr..."; selectByMouse: true }
+                    // A tangible good is numbered with an HSN code, an
+                    // intangible service with a SAC code, so the classification
+                    // decides which code field is asked for below.
+                    Label { text: "Classification:" }
+                    RowLayout {
+                        Layout.fillWidth: true; Layout.preferredWidth: 150; spacing: 14
+                        RadioButton {
+                            id: itemTangibleRadio
+                            text: "Tangible"; checked: true
+                            ToolTip.visible: hovered
+                            ToolTip.text: "A physical good, numbered with an HSN code"
+                        }
+                        RadioButton {
+                            id: itemIntangibleRadio
+                            text: "Intangible"
+                            ToolTip.visible: hovered
+                            ToolTip.text: "A service, numbered with a SAC code"
+                        }
+                    }
 
-                    Item {}   
+                    Label { text: itemTangibleRadio.checked ? "HSN Code:" : "SAC Code:" }
+                    // Both codes are kept and only the one that matches the
+                    // classification is shown, so flipping an item over and
+                    // back never costs you the number already typed.
+                    StackLayout {
+                        Layout.fillWidth: true
+                        Layout.preferredWidth: 150
+                        currentIndex: itemTangibleRadio.checked ? 0 : 1
+                        TextField { id: itemHsnField; placeholderText: "e.g. 85015210"; selectByMouse: true }
+                        TextField { id: itemSacField; placeholderText: "e.g. 998313"; selectByMouse: true }
+                    }
+
+                    // Printed on a delivery challan, so keeping it on the item
+                    // saves retyping it for every delivery.
+                    Label { text: "Unit:" } TextField { id: itemUnitField; Layout.fillWidth: true; Layout.preferredWidth: 150; placeholderText: "Nos, Kg, Mtr..."; selectByMouse: true }
+
+                    // Spans the whole row so the button sits at the right edge
+                    // whether the grid is showing two pairs or three.
                     Button {
-                        text: "Add/Update Item"; highlighted: true  
+                        text: "Add/Update Item"; highlighted: true
+                        Layout.columnSpan: itemEntryGrid.columns
+                        Layout.alignment: Qt.AlignRight
                         onClicked: {
                             var itemMasterDetails = {
                                 partName: itemPartNameField.text,
@@ -1039,16 +1124,19 @@ ApplicationWindow {
                                 requiredQty: itemRequiredQtyField.value,
                                 stockQty: itemRequiredQtyField.value,
                                 vendor: itemVendorField.currentText,
+                                itemType: itemTangibleRadio.checked ? "Tangible" : "Intangible",
                                 hsnCode: itemHsnField.text,
+                                sacCode: itemSacField.text,
                                 unit: itemUnitField.text
                             }
                             if (excelHandler.addItemMasterDetails(itemMasterDetails)) {
                                 refreshItemMasterList()
                                 itemPartNameField.text = ""; itemPartNoField.text = ""; itemDepartmentField.text = "";
                                 itemUnitPriceField.text = "0.00"; itemRequiredQtyField.value = 0; itemVendorField.currentIndex = -1;
-                                itemHsnField.text = ""; itemUnitField.text = "";
+                                itemHsnField.text = ""; itemSacField.text = ""; itemUnitField.text = "";
+                                itemTangibleRadio.checked = true;
                             }
-                        }    
+                        }
                     }
                 }
             }
@@ -1059,7 +1147,7 @@ ApplicationWindow {
                 TextField {
                     id: itemSearchField
                     Layout.fillWidth: true
-                    placeholderText: "Search by part name, part no, department, vendor..."
+                    placeholderText: "Search by part name, part no, department, vendor, HSN/SAC..."
                     selectByMouse: true
                     Keys.onReturnPressed: itemSearchButton.clicked()
                     onTextChanged: refreshItemMasterList(text)
@@ -1090,13 +1178,23 @@ ApplicationWindow {
                                 ColumnLayout {
                                     anchors.fill: parent
                                     spacing: 2
-                                    Label { text: model.partName + " (" + model.partNo + ")"; font.bold: true; font.pixelSize: 13; color: "#2c3e50" }
-                                    Label { text: "Department: " + model.department + " | Vendor: " + model.vendor; font.pixelSize: 11; color: "#7f8c8d" }
+                                    Label {
+                                        text: model.partName + " (" + model.partNo + ")"
+                                        font.bold: true; font.pixelSize: 13; color: "#2c3e50"
+                                        Layout.fillWidth: true; elide: Text.ElideRight
+                                    }
+                                    Label {
+                                        text: "Department: " + model.department + " | Vendor: " + model.vendor
+                                        font.pixelSize: 11; color: "#7f8c8d"
+                                        Layout.fillWidth: true; elide: Text.ElideRight
+                                    }
                                     Label {
                                         text: "Unit Price: " + formatRupees(model.unitPrice) + " | Required Qty: " + model.requiredQty +
-                                              (model.hsnCode !== "" ? " | HSN: " + model.hsnCode : "") +
+                                              " | " + model.itemType +
+                                              (model.taxCode !== "" ? " | " + (model.itemType === "Intangible" ? "SAC: " : "HSN: ") + model.taxCode : "") +
                                               (model.unit !== "" ? " | Unit: " + model.unit : "")
                                         font.pixelSize: 10; color: "#95a5a6"
+                                        Layout.fillWidth: true; elide: Text.ElideRight
                                     }
                                 }
 
@@ -1111,7 +1209,9 @@ ApplicationWindow {
                                             unitPrice: model.unitPrice,
                                             requiredQty: model.requiredQty,
                                             vendor: model.vendor,
+                                            itemType: model.itemType,
                                             hsnCode: model.hsnCode,
+                                            sacCode: model.sacCode,
                                             unit: model.unit
                                         })
                                     }
@@ -1148,45 +1248,87 @@ ApplicationWindow {
         modal: true
         anchors.centerIn: parent
         standardButtons: Dialog.Ok | Dialog.Cancel
-        width: 700
+        // Wide enough for three field pairs per row, and never taller than the
+        // window: the fields scroll inside rather than pushing the OK and
+        // Cancel buttons off the bottom edge.
+        width: Math.min(root.width - 120, 1100)
+        height: Math.min(root.height - 120, 520)
 
         ColumnLayout {
-            spacing: 10; width: parent.width
+            anchors.fill: parent
+            spacing: 10
             Label { text: "Edit Item Details"; font.bold: true; font.pixelSize: 14 }
             Rectangle { Layout.fillWidth: true; height: 1; color: "#ccc" }
 
-            GridLayout {
-                Layout.fillWidth: true
-                columns: 4; rowSpacing: 8; columnSpacing: 10
+            ScrollView {
+                id: editItemScroll
+                Layout.fillWidth: true; Layout.fillHeight: true
+                clip: true
+                contentWidth: availableWidth
 
-                Label { text: "Part Name:" } TextField { id: editItemPartNameField; Layout.fillWidth: true; placeholderText: "Part name" }
-                Label { text: "Part No:" } TextField { id: editItemPartNoField; Layout.fillWidth: true; placeholderText: "Part number" }
-                Label { text: "Department:" } TextField { id: editItemDepartmentField; Layout.fillWidth: true; placeholderText: "Department" }
-                Label { text: "Unit Price:" }
-                TextField {
-                    id: editItemUnitPriceField
-                    Layout.fillWidth: true
-                    placeholderText: "0.00"
-                    text: "0.00"
-                    validator: DoubleValidator { bottom: 0; decimals: 2 }
-                    inputMethodHints: Qt.ImhFormattedNumbersOnly
-                    selectByMouse: true
-                }
-                Label { text: "Required Quantity:" } SpinBox { id: editItemRequiredQtyField; from: 0; to: 100000; value: 0; editable: true }
-                Label { text: "Vendor Preferred:" }
-                RowLayout {
-                    Layout.fillWidth: true; spacing: 6
-                    ComboBox { id: editItemVendorField; Layout.fillWidth: true; editable: true; model: excelHandler.getVendorNames() }
-                    Button {
-                        text: "\u{1F50D}"
-                        Layout.preferredWidth: 40
-                        ToolTip.visible: hovered
-                        ToolTip.text: "Search vendors"
-                        onClicked: openVendorPicker(editItemVendorField)
+                GridLayout {
+                    width: editItemScroll.availableWidth
+                    columns: width > 900 ? 6 : 4
+                    rowSpacing: 8; columnSpacing: 10
+
+                    Label { text: "Part Name:" } TextField { id: editItemPartNameField; Layout.fillWidth: true; Layout.preferredWidth: 150; placeholderText: "Part name" }
+                    Label { text: "Part No:" } TextField { id: editItemPartNoField; Layout.fillWidth: true; Layout.preferredWidth: 150; placeholderText: "Part number" }
+                    Label { text: "Department:" } TextField { id: editItemDepartmentField; Layout.fillWidth: true; Layout.preferredWidth: 150; placeholderText: "Department" }
+                    Label { text: "Unit Price:" }
+                    TextField {
+                        id: editItemUnitPriceField
+                        Layout.fillWidth: true
+                        Layout.preferredWidth: 150
+                        placeholderText: "0.00"
+                        text: "0.00"
+                        validator: DoubleValidator { bottom: 0; decimals: 2 }
+                        inputMethodHints: Qt.ImhFormattedNumbersOnly
+                        selectByMouse: true
                     }
+                    Label { text: "Required Quantity:" } SpinBox { id: editItemRequiredQtyField; Layout.fillWidth: true; Layout.preferredWidth: 150; from: 0; to: 100000; value: 0; editable: true }
+                    Label { text: "Vendor Preferred:" }
+                    RowLayout {
+                        Layout.fillWidth: true; Layout.preferredWidth: 150; spacing: 6
+                        ComboBox { id: editItemVendorField; Layout.fillWidth: true; editable: true; model: excelHandler.getVendorNames() }
+                        Button {
+                            text: "\u{1F50D}"
+                            Layout.preferredWidth: 40
+                            ToolTip.visible: hovered
+                            ToolTip.text: "Search vendors"
+                            onClicked: openVendorPicker(editItemVendorField)
+                        }
+                    }
+
+                    // Same pairing as the add form: the classification decides
+                    // whether this item is numbered by HSN or by SAC.
+                    Label { text: "Classification:" }
+                    RowLayout {
+                        Layout.fillWidth: true; Layout.preferredWidth: 150; spacing: 14
+                        RadioButton {
+                            id: editItemTangibleRadio
+                            text: "Tangible"; checked: true
+                            ToolTip.visible: hovered
+                            ToolTip.text: "A physical good, numbered with an HSN code"
+                        }
+                        RadioButton {
+                            id: editItemIntangibleRadio
+                            text: "Intangible"
+                            ToolTip.visible: hovered
+                            ToolTip.text: "A service, numbered with a SAC code"
+                        }
+                    }
+
+                    Label { text: editItemTangibleRadio.checked ? "HSN Code:" : "SAC Code:" }
+                    StackLayout {
+                        Layout.fillWidth: true
+                        Layout.preferredWidth: 150
+                        currentIndex: editItemTangibleRadio.checked ? 0 : 1
+                        TextField { id: editItemHsnField; placeholderText: "e.g. 85015210"; selectByMouse: true }
+                        TextField { id: editItemSacField; placeholderText: "e.g. 998313"; selectByMouse: true }
+                    }
+
+                    Label { text: "Unit:" } TextField { id: editItemUnitField; Layout.fillWidth: true; Layout.preferredWidth: 150; placeholderText: "Nos, Kg, Mtr..."; selectByMouse: true }
                 }
-                Label { text: "HSN/SAC Code:" } TextField { id: editItemHsnField; Layout.fillWidth: true; placeholderText: "e.g. 85015210"; selectByMouse: true }
-                Label { text: "Unit:" } TextField { id: editItemUnitField; Layout.fillWidth: true; placeholderText: "Nos, Kg, Mtr..."; selectByMouse: true }
             }
         }
 
@@ -1201,7 +1343,9 @@ ApplicationWindow {
                 requiredQty: editItemRequiredQtyField.value,
                 stockQty: editItemRequiredQtyField.value,
                 vendor: editItemVendorField.currentText,
+                itemType: editItemTangibleRadio.checked ? "Tangible" : "Intangible",
                 hsnCode: editItemHsnField.text,
+                sacCode: editItemSacField.text,
                 unit: editItemUnitField.text
             }
 
@@ -1219,8 +1363,10 @@ ApplicationWindow {
             var item = items[i];
                 var department = item.department || item.category || ""
                 var requiredQty = item.requiredQty || item.stockQty || 0
+                var itemType = item.itemType || "Tangible"
                 var haystack = [
-                    item.partName, item.partNo, department, item.vendor
+                    item.partName, item.partNo, department, item.vendor,
+                    itemType, item.hsnCode, item.sacCode
                 ].join(" ").toLowerCase()
                 if (query !== "" && haystack.indexOf(query) === -1) continue
                 itemMasterListModel.append({
@@ -1230,7 +1376,11 @@ ApplicationWindow {
                     unitPrice: item.unitPrice || 0,
                     requiredQty: requiredQty,
                     vendor: item.vendor || "",
+                    itemType: itemType,
                     hsnCode: item.hsnCode || "",
+                    sacCode: item.sacCode || "",
+                    // Whichever of the two the classification says to print.
+                    taxCode: item.taxCode || "",
                     unit: item.unit || "",
               })
         }
@@ -1272,7 +1422,9 @@ ApplicationWindow {
                 requiredQty: item.requiredQty || item.stockQty || 0,
                 unitPrice: item.unitPrice || 0,
                 vendor: item.vendor || "",
-                hsnCode: item.hsnCode || "",
+                // The challan has one HSN/SAC column, so it gets the code that
+                // matches how the item is classified.
+                hsnCode: item.taxCode || item.hsnCode || "",
                 unit: item.unit || ""
             }
         }
@@ -4769,7 +4921,7 @@ ApplicationWindow {
             var partName = (it.partName || "").toString()
             if (partName.trim() === "") continue
             var partNo = (it.partNo || "").toString()
-            var hsn = (it.hsnCode || "").toString()
+            var hsn = (it.taxCode || it.hsnCode || "").toString()
             var unit = (it.unit || "").toString()
             if (f !== "" &&
                 (partName + " " + partNo + " " + hsn + " " + unit).toLowerCase().indexOf(f) === -1)
@@ -5679,6 +5831,37 @@ ApplicationWindow {
     // True while this computer is talking to a shared server rather than its own
     // local file; gates the one-time "copy my data up" step below.
     property bool dbOnServer: false
+    // True when this machine is set up to use the shared server but is running
+    // on its own local copy instead, so nothing it does is seen by anyone else.
+    property bool dbUsingLocalFallback: false
+    property string dbFallbackReason: ""
+    property string dbConfiguredHost: ""
+
+    function refreshDbConnectionState() {
+        var cfg = excelHandler.getDatabaseSettings()
+        root.dbOnServer = excelHandler.isDatabaseServerBackend()
+        root.dbConfiguredHost = cfg.host || ""
+        root.dbUsingLocalFallback = (cfg.driver === "QPSQL") && !root.dbOnServer
+        root.dbFallbackReason = excelHandler.databaseLastError()
+    }
+
+    function retryDatabaseConnection() {
+        var cfg = excelHandler.getDatabaseSettings()
+        statusLabel.text = "Reconnecting to " + cfg.host + "..."
+        excelHandler.configureDatabase(cfg.driver, cfg.host, cfg.port,
+                                       cfg.name, cfg.user, cfg.password)
+        refreshDbConnectionState()
+        if (root.dbOnServer) {
+            rows = excelHandler.model.rowCount()
+            columns = excelHandler.model.columnCount()
+            root.tableRefreshToken++
+            refreshStockOverview()
+            statusLabel.text = "Connected to the shared database"
+        } else {
+            statusLabel.text = "Still cannot reach " + cfg.host
+        }
+        statusTimer.restart()
+    }
 
     Dialog {
         id: cloudSettingsDialog
@@ -5858,7 +6041,7 @@ ApplicationWindow {
                             dbStatusLabel.text = excelHandler.databaseStatus()
                             statusLabel.text = wantServer ? "Connected to shared database"
                                                           : "Using local database (this computer only)"
-                            root.dbOnServer = excelHandler.isDatabaseServerBackend()
+                            refreshDbConnectionState()
                             // Stay open after joining a server so the one-time
                             // data copy below is right where it is needed.
                             if (!wantServer) cloudSettingsDialog.close()
@@ -6091,6 +6274,49 @@ ApplicationWindow {
 
     ColumnLayout {
         anchors.fill: parent; spacing: 0
+
+        // Working alone when this machine was set up to share. Worth saying
+        // loudly and permanently: everything still works, but none of it
+        // reaches the people who expect to see it.
+        Rectangle {
+            Layout.fillWidth: true; Layout.preferredHeight: 44
+            color: "#fdecea"; border.color: "#e74c3c"; border.width: 1
+            visible: root.dbUsingLocalFallback
+
+            RowLayout {
+                anchors.fill: parent; anchors.margins: 8; spacing: 10
+
+                ColumnLayout {
+                    Layout.fillWidth: true; spacing: 1
+                    Label {
+                        text: "Not connected to the shared server" +
+                              (root.dbConfiguredHost !== "" ? " (" + root.dbConfiguredHost + ")" : "") +
+                              " - working on this computer's own copy. Your changes will NOT be seen by anyone else."
+                        font.pixelSize: 12; color: "#c0392b"; font.bold: true
+                        Layout.fillWidth: true; elide: Text.ElideRight
+                    }
+                    Label {
+                        text: root.dbFallbackReason
+                        visible: text !== ""
+                        font.pixelSize: 10; color: "#96504a"
+                        Layout.fillWidth: true; elide: Text.ElideRight
+                    }
+                }
+
+                Button {
+                    text: "Retry"
+                    ToolTip.visible: hovered
+                    ToolTip.text: "Try the shared server again"
+                    onClicked: retryDatabaseConnection()
+                    contentItem: Text { text: "Retry"; color: "#c0392b"; font.bold: true; font.pixelSize: 12; horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter }
+                }
+                Button {
+                    text: "Settings"
+                    onClicked: cloudSettingsDialog.open()
+                    contentItem: Text { text: "Settings"; color: "#c0392b"; font.pixelSize: 12; horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter }
+                }
+            }
+        }
 
         // Low stock warning
         Rectangle {
@@ -6635,9 +6861,12 @@ ApplicationWindow {
         rows = excelHandler.model.rowCount()
         columns = excelHandler.model.columnCount()
         root.fileType = "stock"
-        statusLabel.text = excelHandler.isDatabaseConnected()
-                ? "Ready - stock loaded from database"
-                : "Warning: database not connected"
+        refreshDbConnectionState()
+        statusLabel.text = root.dbUsingLocalFallback
+                ? "Working on this computer's local copy - the shared server did not answer"
+                : (excelHandler.isDatabaseConnected()
+                   ? "Ready - stock loaded from database"
+                   : "Warning: database not connected")
 
         refreshStockOverview()
 

@@ -95,7 +95,7 @@ QVariantMap DatabaseManager::migrateLocalDataToServer()
 
     // Tables in dependency order. The id of a serial-keyed table is dropped so
     // the server assigns its own, exactly as normal inserts do.
-    struct Copy { const char *table; bool serialId; };
+    struct Copy { const char *table; bool serialId; };  
     static const QVector<Copy> kTables = {
         {"vendors",         false},
         {"item_master",     false},
@@ -130,20 +130,20 @@ QVariantMap DatabaseManager::migrateLocalDataToServer()
 
                 const QString table = QString::fromLatin1(c.table);
                 const int existing = tableRowCount(table);
-                if (existing < 0) { failure = "Could not read " + table + " on the server"; break; }
+                if (existing < 0) { failure = "Could not read " + table + " on the server"; break; }    
                 // Never write into a table that already holds shared rows.
                 if (existing > 0) { skipped << table; continue; }
 
                 QSqlQuery src(local);
-                if (!src.exec("SELECT * FROM " + table)) {
+                if (!src.exec("SELECT * FROM " + table)) {                               
                     // A table missing locally simply has nothing to contribute.
                     continue;
-                }
+                }                                                                          
 
                 // The destination column types, used to coerce values below.
                 QSqlQuery meta(server);
                 QSqlRecord destRec;
-                if (meta.exec("SELECT * FROM " + table + " WHERE 1 = 0"))
+                if (meta.exec("SELECT * FROM " + table + " WHERE 1 = 0"))           
                     destRec = meta.record();
 
                 int rows = 0;
@@ -154,7 +154,7 @@ QVariantMap DatabaseManager::migrateLocalDataToServer()
                     QVariantList values;
                     for (int i = 0; i < rec.count(); ++i) {
                         const QString col = rec.fieldName(i);
-                        if (c.serialId && col == QLatin1String("id")) continue;
+                        if (c.serialId && col == QLatin1String("id")) continue;  
 
                         // SQLite stores whatever was typed regardless of the
                         // column's declared type, so old rows can hold text in
@@ -164,7 +164,7 @@ QVariantMap DatabaseManager::migrateLocalDataToServer()
                         QVariant v = rec.value(i);
                         const int destIdx = destRec.indexOf(col);
                         if (destIdx >= 0 && !v.isNull()) {
-                            const QMetaType destType = destRec.field(destIdx).metaType();
+                            const QMetaType destType = destRec.field(destIdx).metaType();   
                             if (destType.isValid() && v.metaType() != destType) {
                                 QVariant conv = v;
                                 if (conv.convert(destType)) {
@@ -205,7 +205,7 @@ QVariantMap DatabaseManager::migrateLocalDataToServer()
                         const int localValue = src.value(1).toInt();
 
                         QSqlQuery cur(server);
-                        cur.prepare("SELECT value FROM counters WHERE name = ?");
+                        cur.prepare("SELECT value FROM counters WHERE name = ?");  
                         cur.addBindValue(name);
                         int serverValue = 0;
                         bool present = false;
@@ -253,7 +253,7 @@ QVariantMap DatabaseManager::migrateLocalDataToServer()
                             failure = "Copying users failed: " + ins.lastError().text();
                             break;
                         }
-                        copied["users"] = copied.value("users").toInt() + 1;
+                        copied["users"] = copied.value("users").toInt() + 1;               
                     }
                 }
             }
@@ -322,6 +322,30 @@ bool DatabaseManager::configureConnection(const QString &driver,
     return connectDatabase();
 }
 
+// Connection options for a shared server.
+//
+// Without an explicit connect timeout the operating system alone decides how
+// long a dead server is waited for, and it is patient: Linux retries the TCP
+// handshake for over two minutes. That wait happens while the app is starting,
+// so the window cannot appear until it ends - the app looks like it simply
+// failed to launch. Five seconds is a lifetime on a LAN, so a server that has
+// not answered by then is off, and falling back to the local file immediately
+// is the useful thing to do.
+//
+// The keepalives cover the other half of the problem: a server that disappears
+// mid-session (a laptop closed, wifi dropped) would otherwise leave the next
+// query hanging on a socket the kernel has not given up on yet.
+static QString serverConnectOptions(const QString &driver)
+{
+    if (driver == QLatin1String("QPSQL"))
+        return QStringLiteral("connect_timeout=5;keepalives=1;keepalives_idle=30;"
+                              "keepalives_interval=10;keepalives_count=3");
+    if (driver == QLatin1String("QMYSQL"))
+        return QStringLiteral("MYSQL_OPT_CONNECT_TIMEOUT=5;MYSQL_OPT_READ_TIMEOUT=10;"
+                              "MYSQL_OPT_WRITE_TIMEOUT=10");
+    return QString();
+}
+
 bool DatabaseManager::connectDatabase()
 {
     // Tear down any existing connection first (supports reconnect).
@@ -364,12 +388,13 @@ bool DatabaseManager::connectDatabase()
             setError("SQL driver", m_driver + " is not available in this build");
             opened = openLocalSqlite();   // stay usable offline
         } else {
-            QSqlDatabase db = QSqlDatabase::addDatabase(m_driver, m_connectionName);
+            QSqlDatabase db = QSqlDatabase::addDatabase(m_driver, m_connectionName);            
             db.setHostName(cfg.value("host").toString());
             db.setPort(cfg.value("port").toInt());
             db.setDatabaseName(cfg.value("name").toString());
             db.setUserName(cfg.value("user").toString());
             db.setPassword(cfg.value("password").toString());
+            db.setConnectOptions(serverConnectOptions(m_driver));
             if (!db.open()) {
                 setError("Connect to " + m_driver, db.lastError().text());
                 if (QSqlDatabase::contains(m_connectionName))
@@ -610,7 +635,7 @@ bool DatabaseManager::tableHasColumn(const QString &table, const QString &column
 
     if (isPostgres()) {
         q.prepare("SELECT 1 FROM information_schema.columns "
-                  "WHERE table_name = ? AND column_name = ?");
+                  "WHERE table_name = ? AND column_name = ?");                                       
         q.addBindValue(table);
         q.addBindValue(column);
         if (!q.exec()) return false;
@@ -674,7 +699,12 @@ bool DatabaseManager::migrateSchema()
 
     // v3 -> v4: delivery challans print an HSN/SAC code and a unit of measure
     // per line, so the item master carries both and the challan autofills them.
-    for (const char *column : {"hsn_code", "unit"}) {
+    // v4 -> v5: an item is either a tangible good, which carries an HSN code,
+    // or an intangible service, which carries a SAC code. item_type records
+    // which one it is; sac_code sits alongside hsn_code rather than replacing
+    // it so reclassifying an item never throws away the other number. Rows
+    // written before this have no item_type and load as tangible.
+    for (const char *column : {"hsn_code", "unit", "item_type", "sac_code"}) {
         if (tableHasColumn("item_master", column)) continue;
         if (!q.exec(QStringLiteral("ALTER TABLE item_master ADD COLUMN %1 TEXT")
                         .arg(QLatin1String(column)))) {
@@ -708,18 +738,18 @@ void DatabaseManager::seedDefaults()
 
 // ==================== Generic table access ====================
 
-QVector<QVariantMap> DatabaseManager::selectAll(const QString &table, const QString &orderBy)
+QVector<QVariantMap> DatabaseManager::selectAll(const QString &table, const QString &orderBy)  
 {
     QVector<QVariantMap> rows;
     QSqlDatabase db = database();
     if (!db.isOpen()) return rows;
 
     QString sql = "SELECT * FROM " + table;
-    if (!orderBy.isEmpty()) sql += " ORDER BY " + orderBy;
+    if (!orderBy.isEmpty()) sql += " ORDER BY " + orderBy;   
 
     QSqlQuery q(db);
     if (!q.exec(sql)) {
-        setError("Select from " + table, q.lastError().text());
+        setError("Select from " + table, q.lastError().text());         
         return rows;
     }
 
@@ -733,7 +763,7 @@ QVector<QVariantMap> DatabaseManager::selectAll(const QString &table, const QStr
     return rows;
 }
 
-bool DatabaseManager::replaceAll(const QString &table, const QVector<QVariantMap> &rows)
+bool DatabaseManager::replaceAll(const QString &table, const QVector<QVariantMap> &rows)     
 {
     QSqlDatabase db = database();
     if (!db.isOpen()) return false;
@@ -796,7 +826,7 @@ bool DatabaseManager::upsert(const QString &table, const QStringList &keyCols, c
     }
 
     QStringList whereClauses;
-    for (const QString &k : keyCols) whereClauses << (k + " = ?");
+    for (const QString &k : keyCols) whereClauses << (k + " = ?");     
 
     bool didUpdate = false;
     if (!setClauses.isEmpty()) {
@@ -925,7 +955,7 @@ bool DatabaseManager::hasRemoteChanges()
     return current != m_localVersion;
 }
 
-int DatabaseManager::nextCounter(const QString &name)
+int DatabaseManager::nextCounter(const QString &name)                                                  
 {
     QSqlDatabase db = database();
     if (!db.isOpen()) return 1;
@@ -948,13 +978,13 @@ int DatabaseManager::nextCounter(const QString &name)
     if (q.next()) {
         current = q.value(0).toInt();
         QSqlQuery u(db);
-        u.prepare("UPDATE counters SET value = ? WHERE name = ?");
+        u.prepare("UPDATE counters SET value = ? WHERE name = ?");     
         u.addBindValue(current + 1);
         u.addBindValue(name);
         u.exec();
     } else {
         QSqlQuery ins(db);
-        ins.prepare("INSERT INTO counters (name, value) VALUES (?, ?)");
+        ins.prepare("INSERT INTO counters (name, value) VALUES (?, ?)");           
         ins.addBindValue(name);
         ins.addBindValue(current + 1);
         ins.exec();
@@ -986,7 +1016,7 @@ bool DatabaseManager::ensureUser(const QString &username, const QString &plainPa
     if (!db.isOpen()) return false;
 
     QSqlQuery check(db);
-    check.prepare("SELECT username FROM users WHERE username = ?");
+    check.prepare("SELECT username FROM users WHERE username = ?");           
     check.addBindValue(username);
     if (check.exec() && check.next())
         return true;   // already exists, leave it untouched
