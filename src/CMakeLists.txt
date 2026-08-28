@@ -29,8 +29,8 @@ qt_add_library(EnsteinCore STATIC
     #  Each service owns its rows and the rules that go with them, and knows
     #  nothing about QML. service.h explains the three rules they all follow.
     domain/service.h
-    domain/vendorservice.h      domain/vendorservice.cpp
-    domain/itemmasterservice.h  domain/itemmasterservice.cpp
+    domain/vendorservice.h          domain/vendorservice.cpp
+    domain/itemmasterservice.h      domain/itemmasterservice.cpp
     domain/deliverychallanservice.h domain/deliverychallanservice.cpp
     domain/purchaserequestservice.h domain/purchaserequestservice.cpp
     domain/stockmovementservice.h   domain/stockmovementservice.cpp

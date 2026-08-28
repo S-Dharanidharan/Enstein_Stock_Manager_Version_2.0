@@ -16,6 +16,7 @@ Dialog {
     // siblings, so anything involving another screen goes out as a signal.
     signal vendorChanged()
     signal dropdownsStale()
+    property var departmentOptions: Departments.options([])
 
     title: "Vendor Details"
     modal: true
@@ -39,24 +40,70 @@ Dialog {
             clip: true
             contentWidth: availableWidth
 
-            GridLayout {
+            ColumnLayout {
                 width: editVendorScroll.availableWidth
-                columns: width > 900 ? 6 : 4
-                rowSpacing: 8; columnSpacing: 10
+                spacing: 8
 
-                Label { text: "Name:" } TextField { id: editVendorNameField; Layout.fillWidth: true; Layout.preferredWidth: 150; placeholderText: "Vendor name" }
-                Label { text: "Address:" } TextField { id: editVendorAddressField; Layout.fillWidth: true; Layout.preferredWidth: 150; placeholderText: "Address" }
-                Label { text: "Name of Bank & Branch:" } TextField { id: editVendorBankBranchField; Layout.fillWidth: true; Layout.preferredWidth: 150; placeholderText: "Bank and branch name" }
-                Label { text: "IFSC Code:" } TextField { id: editVendorIfscField; Layout.fillWidth: true; Layout.preferredWidth: 150; placeholderText: "IFSC code" }
-                Label { text: "Bank Account Number:" } TextField { id: editVendorAccountField; Layout.fillWidth: true; Layout.preferredWidth: 150; placeholderText: "Account number" }
-                Label { text: "CIN Number" } TextField { id: editVendorCinField; Layout.fillWidth: true; Layout.preferredWidth: 150; placeholderText: "CIN number" }
-                Label { text: "GSTIN Number:" } TextField { id: editVendorGstinField; Layout.fillWidth: true; Layout.preferredWidth: 150; placeholderText: "GSTIN number" }
-                Label { text: "PAN Number:" } TextField { id: editVendorPANField; Layout.fillWidth: true; Layout.preferredWidth: 150; placeholderText: "PAN number" }
-                Label { text: "Name in PAN Card:" } TextField { id: editVendorPanNameField; Layout.fillWidth: true; Layout.preferredWidth: 150; placeholderText: "Name as per PAN card" }
-                Label { text: "Contact Person:" } TextField { id: editVendorContactPersonField; Layout.fillWidth: true; Layout.preferredWidth: 150; placeholderText: "Contact person name" }
-                Label { text: "Email:" } TextField { id: editVendorEmailField; Layout.fillWidth: true; Layout.preferredWidth: 150; placeholderText: "Email" }
-                Label { text: "Phone No:" } TextField { id: editVendorPhoneNumberField; Layout.fillWidth: true; Layout.preferredWidth: 150; placeholderText: "Phone number" }
-                Label { text: "Item Category:" } TextField { id: editVendorItemCategoryField; Layout.fillWidth: true; Layout.preferredWidth: 150; placeholderText: "Categories supplied" }
+                Rectangle {
+                    Layout.fillWidth: true; implicitHeight: editProfileSection.implicitHeight + 16
+                    color: Theme.surface; border.color: Theme.borderSubtle; radius: 4
+                    ColumnLayout {
+                        id: editProfileSection; anchors.fill: parent; anchors.margins: 8; spacing: 6
+                        Label { text: "VENDOR PROFILE & CONTACT"; font.bold: true; font.pixelSize: 11; color: Theme.textSecondary }
+                        GridLayout {
+                            Layout.fillWidth: true; columns: 4; rowSpacing: 8; columnSpacing: 10
+                            Label { text: "Vendor Name:" } TextField { id: editVendorNameField; Layout.fillWidth: true; placeholderText: "Registered vendor name"; selectByMouse: true }
+                            Label { text: "Department:" } ComboBox { id: editVendorDepartmentField; Layout.fillWidth: true; model: departmentOptions; currentIndex: -1 }
+                            Label { text: "Contact Person:" } TextField { id: editVendorContactPersonField; Layout.fillWidth: true; placeholderText: "Primary contact name"; selectByMouse: true }
+                            Label { text: "Phone No.:" } TextField { id: editVendorPhoneNumberField; Layout.fillWidth: true; placeholderText: "Phone number"; inputMethodHints: Qt.ImhDialableCharactersOnly; selectByMouse: true }
+                            Label { text: "Email:" } TextField { id: editVendorEmailField; Layout.fillWidth: true; Layout.columnSpan: 3; placeholderText: "official@example.com"; inputMethodHints: Qt.ImhEmailCharactersOnly; selectByMouse: true }
+                        }
+                    }
+                }
+
+                Rectangle {
+                    Layout.fillWidth: true; implicitHeight: editAddressSection.implicitHeight + 16
+                    color: Theme.surface; border.color: Theme.borderSubtle; radius: 4
+                    ColumnLayout {
+                        id: editAddressSection; anchors.fill: parent; anchors.margins: 8; spacing: 6
+                        Label { text: "REGISTERED ADDRESS"; font.bold: true; font.pixelSize: 11; color: Theme.textSecondary }
+                        TextArea { id: editVendorAddressField; Layout.fillWidth: true; Layout.preferredHeight: 72; placeholderText: "Building, street, locality, city, state and PIN code"; wrapMode: TextEdit.Wrap; selectByMouse: true }
+                    }
+                }
+
+                RowLayout {
+                    Layout.fillWidth: true; spacing: 8
+                    Rectangle {
+                        Layout.fillWidth: true; implicitHeight: editStatutorySection.implicitHeight + 16
+                        color: Theme.surface; border.color: Theme.borderSubtle; radius: 4
+                        ColumnLayout {
+                            id: editStatutorySection; anchors.fill: parent; anchors.margins: 8; spacing: 6
+                            Label { text: "TAX & REGISTRATION"; font.bold: true; font.pixelSize: 11; color: Theme.textSecondary }
+                            GridLayout {
+                                Layout.fillWidth: true; columns: 2; rowSpacing: 8; columnSpacing: 10
+                                Label { text: "GSTIN:" } TextField { id: editVendorGstinField; Layout.fillWidth: true; placeholderText: "GSTIN number"; selectByMouse: true }
+                                Label { text: "PAN:" } TextField { id: editVendorPANField; Layout.fillWidth: true; placeholderText: "PAN number"; selectByMouse: true }
+                                Label { text: "CIN:" } TextField { id: editVendorCinField; Layout.fillWidth: true; placeholderText: "CIN number"; selectByMouse: true }
+                                Label { text: "PAN Name:" } TextField { id: editVendorPanNameField; Layout.fillWidth: true; placeholderText: "Name as per PAN card"; selectByMouse: true }
+                                Label { text: "Supply Category:" } TextField { id: editVendorItemCategoryField; Layout.fillWidth: true; placeholderText: "Products or services supplied"; selectByMouse: true }
+                            }
+                        }
+                    }
+                    Rectangle {
+                        Layout.fillWidth: true; implicitHeight: editBankSection.implicitHeight + 16
+                        color: Theme.surface; border.color: Theme.borderSubtle; radius: 4
+                        ColumnLayout {
+                            id: editBankSection; anchors.fill: parent; anchors.margins: 8; spacing: 6
+                            Label { text: "BANK DETAILS"; font.bold: true; font.pixelSize: 11; color: Theme.textSecondary }
+                            GridLayout {
+                                Layout.fillWidth: true; columns: 2; rowSpacing: 8; columnSpacing: 10
+                                Label { text: "Bank & Branch:" } TextField { id: editVendorBankBranchField; Layout.fillWidth: true; placeholderText: "Bank and branch name"; selectByMouse: true }
+                                Label { text: "Account Number:" } TextField { id: editVendorAccountField; Layout.fillWidth: true; placeholderText: "Bank account number"; inputMethodHints: Qt.ImhDigitsOnly; selectByMouse: true }
+                                Label { text: "IFSC Code:" } TextField { id: editVendorIfscField; Layout.fillWidth: true; placeholderText: "IFSC code"; selectByMouse: true }
+                            }
+                        }
+                    }
+                }
             }
         }
     }
@@ -76,6 +123,7 @@ Dialog {
             contactPerson: editVendorContactPersonField.text,
             email: editVendorEmailField.text,
             phone: editVendorPhoneNumberField.text,
+            department: editVendorDepartmentField.currentText,
             itemCategory: editVendorItemCategoryField.text
         }
 
@@ -99,6 +147,8 @@ Dialog {
         editVendorContactPersonField.text = vendor.contactPerson || ""
         editVendorEmailField.text = vendor.email || ""
         editVendorPhoneNumberField.text = vendor.phone || ""
+        departmentOptions = Departments.options(Backend.getItemMasterList())
+        editVendorDepartmentField.currentIndex = Departments.indexOf(departmentOptions, vendor.department || "")
         editVendorItemCategoryField.text = vendor.itemCategory || ""
         vendorDetailsDialog.open()
     }

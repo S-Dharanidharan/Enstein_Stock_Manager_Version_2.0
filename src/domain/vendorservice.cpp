@@ -44,7 +44,7 @@ bool VendorService::add(const QVariantMap &vendor)
     qDebug()<<"Adding vendor:" << vendor;
     m_vendors.append(vendor);
     qDebug() << "Vendor added to list:" << vendor;
-    qDebug() << "Current vendor count:" << m_vendors.size();    
+    qDebug() << "Current vendor count:" << m_vendors.size();
     if (!save()) {
         m_vendors.removeLast();
         return false;
@@ -115,6 +115,7 @@ bool VendorService::update(const QVariantMap &vendor)
     updated["contactPerson"] = vendor.value("contactPerson", updated.value("contactPerson")).toString();
     updated["email"] = vendor.value("email", updated.value("email")).toString();
     updated["phone"] = vendor.value("phone", updated.value("phone")).toString();
+    updated["department"] = vendor.value("department", updated.value("department")).toString();
     updated["itemCategory"] = vendor.value("itemCategory", updated.value("itemCategory")).toString();
 
     QVariantMap previous = m_vendors[index];

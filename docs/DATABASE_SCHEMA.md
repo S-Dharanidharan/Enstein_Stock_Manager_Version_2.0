@@ -70,6 +70,7 @@ Owned by **VendorService**.
 | `contact_person` | TEXT | `contactPerson` |
 | `email` | TEXT | `email` |
 | `phone` | TEXT | `phone` |
+| `department` | TEXT | `department` |
 | `item_category` | TEXT | `itemCategory` |
 
 ### `item_master`

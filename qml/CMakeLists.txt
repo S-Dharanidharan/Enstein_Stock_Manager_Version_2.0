@@ -12,7 +12,7 @@
 #  Owned by: the frontend developer. The backend never needs to edit this file.
 # =============================================================================
 
-# ---- Singletons -------------------------------------------------------------
+# ----- Singletons -------------------------------------------------------------
 # A singleton needs BOTH `pragma Singleton` at the top of the .qml file and this
 # property. Miss either and the engine treats it as an ordinary component, so
 # every use of it fails at runtime rather than at build time.
@@ -22,6 +22,7 @@
 set_source_files_properties(
     util/Format.qml
     util/App.qml
+    util/Departments.qml
     theme/Theme.qml
     PROPERTIES QT_QML_SINGLETON_TYPE TRUE
 )
@@ -53,6 +54,7 @@ qt_add_qml_module(EnsteinUi
         # with `import Enstein`.
         util/Format.qml     # number and date formatting
         util/App.qml        # window size, for dialogs to fit inside
+        util/Departments.qml # controlled master-data department names
         theme/Theme.qml     # colours, spacing and type sizes
 
         # ---- Dialogs, grouped by the part of the business they serve -----

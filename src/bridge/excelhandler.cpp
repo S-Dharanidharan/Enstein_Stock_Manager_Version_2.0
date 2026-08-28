@@ -370,7 +370,6 @@ bool ExcelHandler::openInSystemViewer(const QString &path)
     return QDesktopServices::openUrl(QUrl::fromLocalFile(local));
 }
 
-
 // ==================== DELIVERY CHALLAN ====================
 // Delegated to DeliveryChallanService. Part of the QML contract; see
 // docs/QML_API_REFERENCE.md.

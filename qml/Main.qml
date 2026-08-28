@@ -10,6 +10,10 @@ ApplicationWindow {
     visible: true
     width: 1600
     height: 900
+    font.pixelSize: Theme.fontSizeBody
+    // A quiet neutral canvas separates operational panels from the window and
+    // gives every screen the same professional visual baseline.
+    background: Rectangle { color: Theme.workspace }
 
     property int rows: 0
     property int columns: 0
@@ -363,6 +367,7 @@ ApplicationWindow {
             statusLabel.text = "Added: " + partNameField.text; statusTimer.restart()
             partNameField.text = ""; quantityField.value = 1; unitPriceField.text = "0.00"
         }
+
         onOpened: { partNameField.focus = true }
     }
 
@@ -574,7 +579,7 @@ ApplicationWindow {
 
 
 
-    /* =================  ITEM MASTER DIALOG =================== */             
+    /* =================  ITEM MASTER DIALOG =================== */
 
     ItemMasterDialog {
         id: itemMasterDialog
@@ -591,7 +596,7 @@ ApplicationWindow {
         onItemChanged: itemMasterDialog.refresh()
         onVendorPickerRequested: (field) => openVendorPicker(field)
     }
-    
+
 
     property var poPartLookup: ({})
     property var poPartDetailsLookup: ({})
@@ -768,6 +773,12 @@ ApplicationWindow {
                     anchors.left: parent.left; anchors.right: parent.right; anchors.top: parent.top
                     anchors.margins: 14
                     columns: 4; rowSpacing: 12; columnSpacing: 16
+
+                    Label {
+                        text: "ORDER LINE DETAILS"
+                        Layout.columnSpan: 4; Layout.fillWidth: true
+                        font.bold: true; font.pixelSize: 11; color: Theme.textSecondary
+                    }
 
                     // The two caption columns keep a fixed width so both field
                     // columns start on the same edge.
@@ -1965,6 +1976,12 @@ ApplicationWindow {
                     columns: 4; rowSpacing: 10; columnSpacing: 14
 
                     Label {
+                        text: "REQUEST DETAILS & APPROVAL CONTEXT"
+                        Layout.columnSpan: 4; Layout.fillWidth: true
+                        font.bold: true; font.pixelSize: 11; color: Theme.textSecondary
+                    }
+
+                    Label {
                         text: editingPRNumber === "" ? "Next Request:" : "Editing:"
                         font.bold: true
                         Layout.minimumWidth: 104; horizontalAlignment: Text.AlignRight
@@ -2048,12 +2065,15 @@ ApplicationWindow {
                         text: "Reason / Remarks:"; horizontalAlignment: Text.AlignRight
                         Layout.alignment: Qt.AlignRight | Qt.AlignVCenter
                     }
-                    TextField {
+                    TextArea {
                         id: prRemarksField
                         Layout.columnSpan: 3
                         Layout.fillWidth: true
+                        Layout.preferredHeight: 56
                         placeholderText: "What it is for - the reviewer reads this before approving"
+                        wrapMode: TextEdit.Wrap
                         selectByMouse: true
+                        background: Rectangle { color: Theme.surface; border.color: Theme.border; radius: Theme.radiusSmall }
                     }
                 }
             }
@@ -2069,6 +2089,12 @@ ApplicationWindow {
                     anchors.left: parent.left; anchors.right: parent.right; anchors.top: parent.top
                     anchors.margins: 12
                     columns: 4; rowSpacing: 10; columnSpacing: 14
+
+                    Label {
+                        text: "ITEMS REQUESTED"
+                        Layout.columnSpan: 4; Layout.fillWidth: true
+                        font.bold: true; font.pixelSize: 11; color: Theme.textSecondary
+                    }
 
                     Label {
                         text: "Item Name*:"
@@ -3088,6 +3114,12 @@ ApplicationWindow {
                     columns: 4; rowSpacing: 10; columnSpacing: 14
 
                     Label {
+                        text: "PARTY, DELIVERY & CONSIGNEE DETAILS"
+                        Layout.columnSpan: 4; Layout.fillWidth: true
+                        font.bold: true; font.pixelSize: 11; color: Theme.textSecondary
+                    }
+
+                    Label {
                         text: editingDCNumber === "" ? "Next Challan:" : "Editing:"
                         font.bold: true
                         Layout.minimumWidth: 104; horizontalAlignment: Text.AlignRight
@@ -3255,6 +3287,12 @@ ApplicationWindow {
                     anchors.left: parent.left; anchors.right: parent.right; anchors.top: parent.top
                     anchors.margins: 12
                     columns: 4; rowSpacing: 10; columnSpacing: 14
+
+                    Label {
+                        text: "ITEMS BEING DELIVERED"
+                        Layout.columnSpan: 4; Layout.fillWidth: true
+                        font.bold: true; font.pixelSize: 11; color: Theme.textSecondary
+                    }
 
                     Label {
                         text: "Item Name*:"

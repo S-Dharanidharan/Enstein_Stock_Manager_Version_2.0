@@ -22,6 +22,7 @@ Dialog {
     signal partNamesStale(var items)
     signal itemActivated(var item)
     signal vendorPickerRequested(var field)
+    property var departmentOptions: Departments.options([])
 
     title: "Item Master Management"
     modal: true
@@ -42,93 +43,95 @@ Dialog {
             // Height follows the form rather than a fixed 245, so the
             // classification row added below cannot push the Add button
             // past the bottom edge.
-            Layout.preferredHeight: itemEntryGrid.implicitHeight + 20
-            color: Theme.infoWash; border.color: Theme.info; radius: 5
+            Layout.preferredHeight: itemEntryForm.implicitHeight + 20
+            color: Theme.surfaceAlt; border.color: Theme.border; radius: 5
 
-            GridLayout {
-                id: itemEntryGrid
+            ColumnLayout {
+                id: itemEntryForm
                 anchors.fill: parent; anchors.margins: 10
-                // Three label/field pairs per row when there is width for
-                // them, two when the window is narrow.
-                columns: width > 900 ? 6 : 4
-                rowSpacing: 8; columnSpacing: 10
+                spacing: 8
 
-                Label { text: "Part Name:" } TextField { id: itemPartNameField; Layout.fillWidth: true; Layout.preferredWidth: 150; placeholderText: "Part name" }
-                Label { text: "Part No:" } TextField { id: itemPartNoField; Layout.fillWidth: true; Layout.preferredWidth: 150; placeholderText: "Part number" }
-                Label { text: "Department:" } TextField { id: itemDepartmentField; Layout.fillWidth: true; Layout.preferredWidth: 150; placeholderText: "Department" }
-                Label { text: "Unit Price:" }
-                TextField {
-                    id: itemUnitPriceField
-                    Layout.fillWidth: true
-                    Layout.preferredWidth: 150
-                    placeholderText: "0.00"
-                    text: "0.00"
-                    validator: DoubleValidator { bottom: 0; decimals: 2 }
-                    inputMethodHints: Qt.ImhFormattedNumbersOnly
-                    selectByMouse: true
+                Rectangle {
+                    Layout.fillWidth: true; implicitHeight: itemIdentitySection.implicitHeight + 16
+                    color: Theme.surface; border.color: Theme.borderSubtle; radius: 4
+                    ColumnLayout {
+                        id: itemIdentitySection; anchors.fill: parent; anchors.margins: 8; spacing: 6
+                        Label { text: "ITEM IDENTIFICATION & OWNERSHIP"; font.bold: true; font.pixelSize: 11; color: Theme.textSecondary }
+                        GridLayout {
+                            Layout.fillWidth: true; columns: 4; rowSpacing: 8; columnSpacing: 10
+                            Label { text: "Part Name:" } TextField { id: itemPartNameField; Layout.fillWidth: true; placeholderText: "Part name"; selectByMouse: true }
+                            Label { text: "Part Number:" } TextField { id: itemPartNoField; Layout.fillWidth: true; placeholderText: "Unique part number"; selectByMouse: true }
+                            Label { text: "Department:" } ComboBox { id: itemDepartmentField; Layout.fillWidth: true; model: departmentOptions; currentIndex: -1 }
+                            Label { text: "Preferred Vendor:" }
+                            RowLayout {
+                                Layout.fillWidth: true; spacing: 6
+                                ComboBox { id: itemVendorField; Layout.fillWidth: true; editable: true; model: Backend.getVendorNames() }
+                                Button { text: "Search"; ToolTip.visible: hovered; ToolTip.text: "Search vendors"; onClicked: vendorPickerRequested(itemVendorField) }
+                            }
+                        }
+                    }
                 }
-                Label { text: "Required Quantity:" } SpinBox { id: itemRequiredQtyField; Layout.fillWidth: true; Layout.preferredWidth: 150; from: 0; to: 100000; value: 0; editable: true }
-                Label { text: "Vendor Preferred:" }
+
                 RowLayout {
-                    Layout.fillWidth: true; Layout.preferredWidth: 150; spacing: 6
-                    ComboBox { id: itemVendorField; Layout.fillWidth: true; editable: true; model: Backend.getVendorNames() }
-                    Button {
-                        text: "\u{1F50D}"
-                        Layout.preferredWidth: 40
-                        ToolTip.visible: hovered
-                        ToolTip.text: "Search vendors"
-                        onClicked: vendorPickerRequested(itemVendorField)
+                    Layout.fillWidth: true; spacing: 8
+                    Rectangle {
+                        Layout.fillWidth: true; implicitHeight: itemPlanningSection.implicitHeight + 16
+                        color: Theme.surface; border.color: Theme.borderSubtle; radius: 4
+                        ColumnLayout {
+                            id: itemPlanningSection; anchors.fill: parent; anchors.margins: 8; spacing: 6
+                            Label { text: "PLANNING & PRICING"; font.bold: true; font.pixelSize: 11; color: Theme.textSecondary }
+                            GridLayout {
+                                Layout.fillWidth: true; columns: 2; rowSpacing: 8; columnSpacing: 10
+                                Label { text: "Unit Price:" }
+                                TextField {
+                                    id: itemUnitPriceField
+                                    Layout.fillWidth: true
+                                    placeholderText: "0.00"
+                                    text: "0.00"
+                                    validator: DoubleValidator { bottom: 0; decimals: 2 }
+                                    inputMethodHints: Qt.ImhFormattedNumbersOnly
+                                    selectByMouse: true
+                                }
+                                Label { text: "Required Quantity:" } SpinBox { id: itemRequiredQtyField; Layout.fillWidth: true; from: 0; to: 100000; value: 0; editable: true }
+                                Label { text: "Unit:" } TextField { id: itemUnitField; Layout.fillWidth: true; placeholderText: "Nos, Kg, Mtr"; selectByMouse: true }
+                            }
+                        }
+                    }
+                    Rectangle {
+                        Layout.fillWidth: true; implicitHeight: itemClassSection.implicitHeight + 16
+                        color: Theme.surface; border.color: Theme.borderSubtle; radius: 4
+                        ColumnLayout {
+                            id: itemClassSection; anchors.fill: parent; anchors.margins: 8; spacing: 6
+                            Label { text: "TAX CLASSIFICATION"; font.bold: true; font.pixelSize: 11; color: Theme.textSecondary }
+                            RowLayout {
+                                Layout.fillWidth: true; spacing: 14
+                                RadioButton { id: itemTangibleRadio; text: "Tangible (HSN)"; checked: true }
+                                RadioButton { id: itemIntangibleRadio; text: "Intangible (SAC)" }
+                            }
+                            RowLayout {
+                                Layout.fillWidth: true; spacing: 10
+                                Label { text: itemTangibleRadio.checked ? "HSN Code:" : "SAC Code:" }
+                                StackLayout {
+                                    Layout.fillWidth: true; currentIndex: itemTangibleRadio.checked ? 0 : 1
+                                    TextField { id: itemHsnField; placeholderText: "e.g. 85015210"; selectByMouse: true }
+                                    TextField { id: itemSacField; placeholderText: "e.g. 998313"; selectByMouse: true }
+                                }
+                            }
+                        }
                     }
                 }
-
-                // A tangible good is numbered with an HSN code, an
-                // intangible service with a SAC code, so the classification
-                // decides which code field is asked for below.
-                Label { text: "Classification:" }
-                RowLayout {
-                    Layout.fillWidth: true; Layout.preferredWidth: 150; spacing: 14
-                    RadioButton {
-                        id: itemTangibleRadio
-                        text: "Tangible"; checked: true
-                        ToolTip.visible: hovered
-                        ToolTip.text: "A physical good, numbered with an HSN code"
-                    }
-                    RadioButton {
-                        id: itemIntangibleRadio
-                        text: "Intangible"
-                        ToolTip.visible: hovered
-                        ToolTip.text: "A service, numbered with a SAC code"
-                    }
-                }
-
-                Label { text: itemTangibleRadio.checked ? "HSN Code:" : "SAC Code:" }
-                // Both codes are kept and only the one that matches the
-                // classification is shown, so flipping an item over and
-                // back never costs you the number already typed.
-                StackLayout {
-                    Layout.fillWidth: true
-                    Layout.preferredWidth: 150
-                    currentIndex: itemTangibleRadio.checked ? 0 : 1
-                    TextField { id: itemHsnField; placeholderText: "e.g. 85015210"; selectByMouse: true }
-                    TextField { id: itemSacField; placeholderText: "e.g. 998313"; selectByMouse: true }
-                }
-
-                // Printed on a delivery challan, so keeping it on the item
-                // saves retyping it for every delivery.
-                Label { text: "Unit:" } TextField { id: itemUnitField; Layout.fillWidth: true; Layout.preferredWidth: 150; placeholderText: "Nos, Kg, Mtr..."; selectByMouse: true }
 
                 // Spans the whole row so the button sits at the right edge
                 // whether the grid is showing two pairs or three.
                 Button {
                     text: "Add/Update Item"; highlighted: true
-                    Layout.columnSpan: itemEntryGrid.columns
                     Layout.alignment: Qt.AlignRight
                     onClicked: {
                         var itemMasterDetails = {
                             partName: itemPartNameField.text,
                             partNo: itemPartNoField.text,
-                            department: itemDepartmentField.text,
-                            category: itemDepartmentField.text,
+                            department: itemDepartmentField.currentText,
+                            category: itemDepartmentField.currentText,
                             unitPrice: Format.amount(itemUnitPriceField.text),
                             requiredQty: itemRequiredQtyField.value,
                             stockQty: itemRequiredQtyField.value,
@@ -140,7 +143,7 @@ Dialog {
                         }
                         if (Backend.addItemMasterDetails(itemMasterDetails)) {
                             refresh()
-                            itemPartNameField.text = ""; itemPartNoField.text = ""; itemDepartmentField.text = "";
+                            itemPartNameField.text = ""; itemPartNoField.text = ""; itemDepartmentField.currentIndex = -1;
                             itemUnitPriceField.text = "0.00"; itemRequiredQtyField.value = 0; itemVendorField.currentIndex = -1;
                             itemHsnField.text = ""; itemSacField.text = ""; itemUnitField.text = "";
                             itemTangibleRadio.checked = true;
@@ -234,9 +237,9 @@ Dialog {
                             onClicked: { Backend.deleteItem(model.partName); refresh() }
                         }
                     }
-                }   
+                }
             }
-            
+
              Label { anchors.centerIn: parent; text: "No items added"; visible: itemMasterListModel.count === 0; color: Theme.textMuted }
         }
 
@@ -245,6 +248,7 @@ Dialog {
 
     onOpened: {
         refresh()
+        departmentOptions = Departments.options(Backend.getItemMasterList())
         refreshVendorDropdowns()
     }
 

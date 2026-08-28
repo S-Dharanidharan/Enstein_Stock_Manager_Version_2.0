@@ -19,6 +19,7 @@ Dialog {
     // siblings, so anything involving another screen goes out as a signal.
     signal itemChanged()
     signal vendorPickerRequested(var field)
+    property var departmentOptions: Departments.options([])
 
     title: "Item Details"
     modal: true
@@ -49,7 +50,8 @@ Dialog {
 
                 Label { text: "Part Name:" } TextField { id: editItemPartNameField; Layout.fillWidth: true; Layout.preferredWidth: 150; placeholderText: "Part name" }
                 Label { text: "Part No:" } TextField { id: editItemPartNoField; Layout.fillWidth: true; Layout.preferredWidth: 150; placeholderText: "Part number" }
-                Label { text: "Department:" } TextField { id: editItemDepartmentField; Layout.fillWidth: true; Layout.preferredWidth: 150; placeholderText: "Department" }
+                Label { text: "Department:" }
+                ComboBox { id: editItemDepartmentField; Layout.fillWidth: true; Layout.preferredWidth: 150; model: departmentOptions; currentIndex: -1 }
                 Label { text: "Unit Price:" }
                 TextField {
                     id: editItemUnitPriceField
@@ -113,8 +115,8 @@ Dialog {
             originalPartNo: originalPartNo,
             partName: editItemPartNameField.text,
             partNo: editItemPartNoField.text,
-            department: editItemDepartmentField.text,
-            category: editItemDepartmentField.text,
+            department: editItemDepartmentField.currentText,
+            category: editItemDepartmentField.currentText,
             unitPrice: Format.amount(editItemUnitPriceField.text),
             requiredQty: editItemRequiredQtyField.value,
             stockQty: editItemRequiredQtyField.value,
@@ -134,7 +136,8 @@ Dialog {
         originalPartNo = item.partNo || ""
         editItemPartNameField.text = item.partName || ""
         editItemPartNoField.text = item.partNo || ""
-        editItemDepartmentField.text = item.department || ""
+        departmentOptions = Departments.options(Backend.getItemMasterList())
+        editItemDepartmentField.currentIndex = Departments.indexOf(departmentOptions, item.department || "")
         editItemUnitPriceField.text = Format.fixed(item.unitPrice)
         editItemRequiredQtyField.value = item.requiredQty || 0
         editItemVendorField.editText = item.vendor || ""

@@ -20,6 +20,7 @@ Dialog {
     // so anything that involves another screen leaves as a signal.
     signal dropdownsStale()
     signal vendorActivated(var vendor)
+    property var departmentOptions: Departments.options([])
 
     title: "Vendor Management"
     modal: true
@@ -33,7 +34,7 @@ Dialog {
     ColumnLayout {
         anchors.fill: parent; spacing: 10
 
-        Label { text: "Vendor Master"; font.bold: true; font.pixelSize: 16; color: Theme.textPrimary }  
+        Label { text: "Vendor Master"; font.bold: true; font.pixelSize: 16; color: Theme.textPrimary }
 
         // Add Vendor Form
         Rectangle {
@@ -41,36 +42,77 @@ Dialog {
             // Height follows the form rather than a fixed 250, which the
             // thirteen fields had already outgrown - the last row and the
             // Add button were being cut off at the bottom edge.
-            Layout.preferredHeight: vendorEntryGrid.implicitHeight + 20
+            Layout.preferredHeight: vendorEntryForm.implicitHeight + 20
             color: Theme.surfaceAlt; border.color: Theme.border; radius: 5
 
-            GridLayout {
-                id: vendorEntryGrid
+            ColumnLayout {
+                id: vendorEntryForm
                 anchors.fill: parent; anchors.margins: 10
-                // Three label/field pairs per row when there is width for
-                // them, two when the window is narrow.
-                columns: width > 900 ? 6 : 4
-                rowSpacing: 8; columnSpacing: 10
+                spacing: 8
 
-                Label { text: "Name:" } TextField { id: vendorNameField; Layout.fillWidth: true; Layout.preferredWidth: 150; placeholderText: "Vendor name" }
-                Label { text: "Address:" } TextField { id: vendorAddressField; Layout.fillWidth: true; Layout.preferredWidth: 150; placeholderText: "Address" }
-                Label { text: "Name of Bank & Branch:" } TextField { id: vendorBankBranchField; Layout.fillWidth: true; Layout.preferredWidth: 150; placeholderText: "Bank and branch name" }
-                Label { text: "IFSC Code:" } TextField { id: vendorIfscField; Layout.fillWidth: true; Layout.preferredWidth: 150; placeholderText: "IFSC code" }
-                Label { text: "Bank Account Number:" } TextField { id: vendorAccountField; Layout.fillWidth: true; Layout.preferredWidth: 150; placeholderText: "Account number" }
-                Label { text: "CIN Number" } TextField { id: vendorCinField; Layout.fillWidth: true; Layout.preferredWidth: 150; placeholderText: "CIN number" }
-                Label { text: "GSTIN Number:" } TextField { id: vendorGstinField; Layout.fillWidth: true; Layout.preferredWidth: 150; placeholderText: "GSTIN number" }
-                Label { text: "PAN Number:" } TextField { id: vendorPANField; Layout.fillWidth: true; Layout.preferredWidth: 150; placeholderText: "PAN number" }
-                Label { text: "Name in PAN Card:" } TextField { id: vendorPanNameField; Layout.fillWidth: true; Layout.preferredWidth: 150; placeholderText: "Name as per PAN card" }
-                Label { text: "Contact Person:" } TextField { id: vendorContactPersonField; Layout.fillWidth: true; Layout.preferredWidth: 150; placeholderText: "Contact person name" }
-                Label { text: "Email:" } TextField { id: vendorEmailField; Layout.fillWidth: true; Layout.preferredWidth: 150; placeholderText: "Email" }
-                Label { text: "Phone No:" } TextField { id: vendorPhoneNumberField; Layout.fillWidth: true; Layout.preferredWidth: 150; placeholderText: "Phone number" }
-                Label { text: "Item Category:" } TextField { id: vendorItemCategoryField; Layout.fillWidth: true; Layout.preferredWidth: 150; placeholderText: "Categories supplied" }
+                Rectangle {
+                    Layout.fillWidth: true; implicitHeight: vendorProfileSection.implicitHeight + 16
+                    color: Theme.surface; border.color: Theme.borderSubtle; radius: 4
+                    ColumnLayout {
+                        id: vendorProfileSection; anchors.fill: parent; anchors.margins: 8; spacing: 6
+                        Label { text: "VENDOR PROFILE & CONTACT"; font.bold: true; font.pixelSize: 11; color: Theme.textSecondary }
+                        GridLayout {
+                            Layout.fillWidth: true; columns: 4; rowSpacing: 8; columnSpacing: 10
+                            Label { text: "Vendor Name:" } TextField { id: vendorNameField; Layout.fillWidth: true; placeholderText: "Registered vendor name"; selectByMouse: true }
+                            Label { text: "Department:" } ComboBox { id: vendorDepartmentField; Layout.fillWidth: true; model: departmentOptions; currentIndex: -1 }
+                            Label { text: "Contact Person:" } TextField { id: vendorContactPersonField; Layout.fillWidth: true; placeholderText: "Primary contact name"; selectByMouse: true }
+                            Label { text: "Phone No.:" } TextField { id: vendorPhoneNumberField; Layout.fillWidth: true; placeholderText: "Phone number"; inputMethodHints: Qt.ImhDialableCharactersOnly; selectByMouse: true }
+                            Label { text: "Email:" } TextField { id: vendorEmailField; Layout.fillWidth: true; Layout.columnSpan: 3; placeholderText: "official@example.com"; inputMethodHints: Qt.ImhEmailCharactersOnly; selectByMouse: true }
+                        }
+                    }
+                }
 
-                // Spans the whole row so the button sits at the right edge
-                // whether the grid is showing two pairs or three.
+                Rectangle {
+                    Layout.fillWidth: true; implicitHeight: addressSection.implicitHeight + 16
+                    color: Theme.surface; border.color: Theme.borderSubtle; radius: 4
+                    ColumnLayout {
+                        id: addressSection; anchors.fill: parent; anchors.margins: 8; spacing: 6
+                        Label { text: "REGISTERED ADDRESS"; font.bold: true; font.pixelSize: 11; color: Theme.textSecondary }
+                        TextArea { id: vendorAddressField; Layout.fillWidth: true; Layout.preferredHeight: 72; placeholderText: "Building, street, locality, city, state and PIN code"; wrapMode: TextEdit.Wrap; selectByMouse: true }
+                    }
+                }
+
+                RowLayout {
+                    Layout.fillWidth: true; spacing: 8
+                    Rectangle {
+                        Layout.fillWidth: true; implicitHeight: statutorySection.implicitHeight + 16
+                        color: Theme.surface; border.color: Theme.borderSubtle; radius: 4
+                        ColumnLayout {
+                            id: statutorySection; anchors.fill: parent; anchors.margins: 8; spacing: 6
+                            Label { text: "TAX & REGISTRATION"; font.bold: true; font.pixelSize: 11; color: Theme.textSecondary }
+                            GridLayout {
+                                Layout.fillWidth: true; columns: 2; rowSpacing: 8; columnSpacing: 10
+                                Label { text: "GSTIN:" } TextField { id: vendorGstinField; Layout.fillWidth: true; placeholderText: "GSTIN number"; selectByMouse: true }
+                                Label { text: "PAN:" } TextField { id: vendorPANField; Layout.fillWidth: true; placeholderText: "PAN number"; selectByMouse: true }
+                                Label { text: "CIN:" } TextField { id: vendorCinField; Layout.fillWidth: true; placeholderText: "CIN number"; selectByMouse: true }
+                                Label { text: "PAN Name:" } TextField { id: vendorPanNameField; Layout.fillWidth: true; placeholderText: "Name as per PAN card"; selectByMouse: true }
+                                Label { text: "Supply Category:" } TextField { id: vendorItemCategoryField; Layout.fillWidth: true; Layout.columnSpan: 1; placeholderText: "Products or services supplied"; selectByMouse: true }
+                            }
+                        }
+                    }
+                    Rectangle {
+                        Layout.fillWidth: true; implicitHeight: bankSection.implicitHeight + 16
+                        color: Theme.surface; border.color: Theme.borderSubtle; radius: 4
+                        ColumnLayout {
+                            id: bankSection; anchors.fill: parent; anchors.margins: 8; spacing: 6
+                            Label { text: "BANK DETAILS"; font.bold: true; font.pixelSize: 11; color: Theme.textSecondary }
+                            GridLayout {
+                                Layout.fillWidth: true; columns: 2; rowSpacing: 8; columnSpacing: 10
+                                Label { text: "Bank & Branch:" } TextField { id: vendorBankBranchField; Layout.fillWidth: true; placeholderText: "Bank and branch name"; selectByMouse: true }
+                                Label { text: "Account Number:" } TextField { id: vendorAccountField; Layout.fillWidth: true; placeholderText: "Bank account number"; inputMethodHints: Qt.ImhDigitsOnly; selectByMouse: true }
+                                Label { text: "IFSC Code:" } TextField { id: vendorIfscField; Layout.fillWidth: true; Layout.columnSpan: 1; placeholderText: "IFSC code"; selectByMouse: true }
+                            }
+                        }
+                    }
+                }
+
                 Button {
                     text: "Add Vendor"; highlighted: true
-                    Layout.columnSpan: vendorEntryGrid.columns
                     Layout.alignment: Qt.AlignRight
                     onClicked: {
 
@@ -87,6 +129,7 @@ Dialog {
                             contactPerson: vendorContactPersonField.text,
                             email: vendorEmailField.text,
                             phone: vendorPhoneNumberField.text,
+                            department: vendorDepartmentField.currentText,
                             itemCategory: vendorItemCategoryField.text
                         })
 
@@ -103,6 +146,7 @@ Dialog {
                                 contactPerson: vendorContactPersonField.text,
                                 email: vendorEmailField.text,
                                 phone: vendorPhoneNumberField.text,
+                                department: vendorDepartmentField.currentText,
                                 itemCategory: vendorItemCategoryField.text
                             }
 
@@ -113,7 +157,7 @@ Dialog {
                             // vendorIfscField.text = ""; vendorAccountField.text = ""; vendorCinField.text = "";
                             // vendorGstinField.text = ""; vendorPANField.text = ""; vendorPanNameField.text = "";
                             // vendorContactPersonField.text = ""; vendorEmailField.text = ""; vendorPhoneNumberField.text = "";
-                            // vendorItemCategoryField.text = "";   
+                            // vendorItemCategoryField.text = "";
                         }
                     }
                 }
@@ -180,6 +224,7 @@ Dialog {
                                         name: model.name,
                                         address: model.address,
                                         phone: model.phone,
+                                        department: model.department,
                                         email: model.email,
                                         bankBranch: model.bankBranch,
                                         ifsc: model.ifsc,
@@ -219,6 +264,7 @@ Dialog {
 
     onOpened: {
         refresh()
+        departmentOptions = Departments.options(Backend.getItemMasterList())
         refreshVendorDropdowns()
     }
 
@@ -242,6 +288,7 @@ Dialog {
                     name: v.vendorName || "",
                     address: v.vendorAddress || "",
                     phone: v.phone || "",
+                    department: Departments.canonical(v.department || ""),
                     email: v.email || "",
                     bankBranch: v.bankBranch || "",
                     ifsc: v.ifsc || "",

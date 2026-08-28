@@ -12,7 +12,6 @@
 int main(int argc, char *argv[])
 {
     QApplication app(argc, argv);
-
     // The icon is compiled into the binary, so a packaged build shows it with
     // no loose file next to the exe. The on-disk paths remain as a fallback for
     // running straight out of a source tree.

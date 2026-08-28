@@ -17,6 +17,7 @@ const QVector<DbField> kVendorFields = {
     {"contact_person", "contactPerson", 's'},
     {"email",          "email",         's'},
     {"phone",          "phone",         's'},
+    {"department",     "department",    's'},
     {"item_category",  "itemCategory",  's'},
 };
 
@@ -171,7 +172,7 @@ QVariantMap dbRowToApp(const QVector<DbField> &fields, const QVariantMap &dbRow)
     return out;
 }
 
-QVariantMap appRowToDb(const QVector<DbField> &fields, const QVariantMap &appRow) {  
+QVariantMap appRowToDb(const QVector<DbField> &fields, const QVariantMap &appRow) {
     QVariantMap out;
     for (const DbField &f : fields)
         out[f.column] = coerce(appRow.value(f.key), f.type);

@@ -36,6 +36,7 @@ QtObject {
     // ---- Surfaces and lines -------------------------------------------
     readonly property color surface:      "#ffffff"
     readonly property color surfaceAlt:   "#f8f9fa"    // panels, entry forms
+    readonly property color workspace:    "#f4f7fb"    // application canvas
     readonly property color border:       "#dee2e6"
     readonly property color borderSubtle: "#e0e0e0"    // inside lists
     readonly property color divider:      "#bdc3c7"
@@ -53,6 +54,11 @@ QtObject {
     readonly property int spacingSmall:  8
     readonly property int spacing:       10
     readonly property int spacingLarge:  16
+
+    // ---- Shape and control rhythm ------------------------------------
+    readonly property int radiusSmall:   4
+    readonly property int radius:        6
+    readonly property int controlHeight: 34
 
     // ---- Type sizes ---------------------------------------------------
     readonly property int fontSizeTitle:   16
